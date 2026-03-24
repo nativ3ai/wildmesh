@@ -1,11 +1,10 @@
 class Wildmesh < Formula
-  desc "WildMesh local-first peer-to-peer mesh for agents and agent harnesses"
+  desc "Local-first peer-to-peer mesh for agents and agent harnesses"
   homepage "https://github.com/nativ3ai/wildmesh"
   url "https://github.com/nativ3ai/wildmesh/archive/refs/tags/v0.3.0.tar.gz"
   sha256 "00272979c29ba531cbe365358329e74b2edfe8ff462d491383675b7aebf22233"
-  version "0.3.0"
-  head "https://github.com/nativ3ai/wildmesh.git", branch: "main"
   license "MIT"
+  head "https://github.com/nativ3ai/wildmesh.git", branch: "main"
 
   bottle do
     root_url "https://github.com/nativ3ai/wildmesh/releases/download/v0.3.0"
@@ -20,7 +19,7 @@ class Wildmesh < Formula
   end
 
   test do
-    system "#{bin}/wildmesh", "init", "--home", testpath/".wildmesh-test", "--agent-label", "brew-test"
+    system bin/"wildmesh", "init", "--home", testpath/".wildmesh-test", "--agent-label", "brew-test"
     output = shell_output("#{bin}/wildmesh profile --home #{testpath/".wildmesh-test"} --json")
     assert_match "brew-test", output
   end
