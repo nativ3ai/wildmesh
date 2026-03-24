@@ -33,6 +33,12 @@ pub struct AgentMeshConfig {
     pub announce_interval_secs: u64,
     pub direct_connect_timeout_secs: u64,
     pub peer_exchange_interval_secs: u64,
+    pub cooperate_enabled: bool,
+    pub executor_mode: String,
+    pub executor_url: Option<String>,
+    pub executor_model: Option<String>,
+    pub executor_api_key_env: Option<String>,
+    pub artifact_inline_limit_bytes: usize,
 }
 
 impl Default for AgentMeshConfig {
@@ -56,6 +62,12 @@ impl Default for AgentMeshConfig {
             announce_interval_secs: 30,
             direct_connect_timeout_secs: 2,
             peer_exchange_interval_secs: 45,
+            cooperate_enabled: false,
+            executor_mode: "disabled".to_string(),
+            executor_url: None,
+            executor_model: None,
+            executor_api_key_env: None,
+            artifact_inline_limit_bytes: 128 * 1024,
         }
     }
 }

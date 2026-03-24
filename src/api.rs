@@ -8,8 +8,10 @@ use serde::Deserialize;
 use tracing::info;
 
 use crate::models::{
-    AddPeerRequest, BroadcastRequest, BroadcastResponse, CapabilityGrant, DiscoveryAnnounceRequest,
-    GrantRequest, PeerRecord, SendMessageRequest, SubscribeRequest, SubscriptionRecord,
+    AddPeerRequest, ArtifactFetchRequest, ArtifactOfferRequest, ArtifactRecord, BroadcastRequest,
+    BroadcastResponse, CapabilityGrant, ContextCapsuleRequest, DelegateWorkRequest,
+    DiscoveryAnnounceRequest, GrantRequest, PeerRecord, SendMessageRequest, SubscribeRequest,
+    SubscriptionRecord,
 };
 use crate::service::MeshService;
 
@@ -29,6 +31,11 @@ pub fn router(service: MeshService) -> Router {
         .route("/v1/messages/broadcast", post(broadcast))
         .route("/v1/messages/inbox", get(inbox))
         .route("/v1/messages/outbox", get(outbox))
+        .route("/v1/context/send", post(send_context))
+        .route("/v1/artifacts", get(list_artifacts))
+        .route("/v1/artifacts/offer", post(offer_artifact))
+        .route("/v1/artifacts/fetch", post(fetch_artifact))
+        .route("/v1/delegate", post(delegate_work))
         .route("/v1/discovery/announce", post(discovery_announce))
         .with_state(service)
 }
@@ -70,6 +77,8 @@ async fn add_peer(
         label: payload.label,
         agent_label: None,
         agent_description: None,
+        node_type: None,
+        runtime_name: None,
         interests: Vec::new(),
         host: payload.host,
         port: payload.port,
@@ -80,6 +89,9 @@ async fn add_peer(
         discovered: false,
         last_seen_at: None,
         created_at: chrono::Utc::now(),
+        accepts_context_capsules: false,
+        accepts_artifact_exchange: false,
+        accepts_delegate_work: false,
         activity_state: None,
         last_seen_age_secs: None,
     };
@@ -201,4 +213,59 @@ async fn outbox(
         .await
         .map(Json)
         .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+async fn send_context(
+    State(service): State<MeshService>,
+    Json(payload): Json<ContextCapsuleRequest>,
+) -> Result<Json<crate::models::SendMessageResponse>, (axum::http::StatusCode, String)> {
+    service
+        .send_context_capsule(payload)
+        .await
+        .map(Json)
+        .map_err(|err| (axum::http::StatusCode::BAD_REQUEST, err.to_string()))
+}
+
+async fn list_artifacts(
+    State(service): State<MeshService>,
+) -> Result<Json<Vec<ArtifactRecord>>, (axum::http::StatusCode, String)> {
+    service.list_artifacts().await.map(Json).map_err(|err| {
+        (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            err.to_string(),
+        )
+    })
+}
+
+async fn offer_artifact(
+    State(service): State<MeshService>,
+    Json(payload): Json<ArtifactOfferRequest>,
+) -> Result<Json<crate::models::SendMessageResponse>, (axum::http::StatusCode, String)> {
+    service
+        .offer_artifact(payload)
+        .await
+        .map(Json)
+        .map_err(|err| (axum::http::StatusCode::BAD_REQUEST, err.to_string()))
+}
+
+async fn fetch_artifact(
+    State(service): State<MeshService>,
+    Json(payload): Json<ArtifactFetchRequest>,
+) -> Result<Json<crate::models::SendMessageResponse>, (axum::http::StatusCode, String)> {
+    service
+        .fetch_artifact(payload)
+        .await
+        .map(Json)
+        .map_err(|err| (axum::http::StatusCode::BAD_REQUEST, err.to_string()))
+}
+
+async fn delegate_work(
+    State(service): State<MeshService>,
+    Json(payload): Json<DelegateWorkRequest>,
+) -> Result<Json<crate::models::SendMessageResponse>, (axum::http::StatusCode, String)> {
+    service
+        .delegate_work(payload)
+        .await
+        .map(Json)
+        .map_err(|err| (axum::http::StatusCode::BAD_REQUEST, err.to_string()))
 }

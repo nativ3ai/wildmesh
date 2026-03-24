@@ -1,8 +1,10 @@
 pub mod api;
+pub mod artifact;
 pub mod cli;
 pub mod config;
 pub mod crypto;
 pub mod dashboard;
+pub mod executor;
 pub mod models;
 pub mod service;
 pub mod storage;

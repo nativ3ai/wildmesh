@@ -41,6 +41,16 @@ pub enum Commands {
         interests: Vec<String>,
         #[arg(long = "bootstrap-url")]
         bootstrap_urls: Vec<String>,
+        #[arg(long, default_value_t = false, action = ArgAction::SetTrue)]
+        cooperate: bool,
+        #[arg(long, default_value = "disabled")]
+        executor_mode: String,
+        #[arg(long)]
+        executor_url: Option<String>,
+        #[arg(long)]
+        executor_model: Option<String>,
+        #[arg(long)]
+        executor_api_key_env: Option<String>,
         #[arg(long, default_value_t = true, action = ArgAction::Set)]
         with_hermes: bool,
         #[arg(long, default_value_t = true, action = ArgAction::Set)]
@@ -83,6 +93,16 @@ pub enum Commands {
         direct_connect_timeout_secs: u64,
         #[arg(long, default_value_t = 45)]
         peer_exchange_interval_secs: u64,
+        #[arg(long, default_value_t = false, action = ArgAction::SetTrue)]
+        cooperate: bool,
+        #[arg(long, default_value = "disabled")]
+        executor_mode: String,
+        #[arg(long)]
+        executor_url: Option<String>,
+        #[arg(long)]
+        executor_model: Option<String>,
+        #[arg(long)]
+        executor_api_key_env: Option<String>,
     },
     Run {
         #[arg(long)]
@@ -168,7 +188,80 @@ pub enum Commands {
         #[arg(long)]
         home: Option<PathBuf>,
     },
+    Cooperate {
+        #[arg(long)]
+        home: Option<PathBuf>,
+        #[arg(long)]
+        enable: bool,
+        #[arg(long)]
+        disable: bool,
+        #[arg(long)]
+        executor_mode: Option<String>,
+        #[arg(long)]
+        executor_url: Option<String>,
+        #[arg(long)]
+        executor_model: Option<String>,
+        #[arg(long)]
+        executor_api_key_env: Option<String>,
+    },
     Subscriptions {
+        #[arg(long)]
+        home: Option<PathBuf>,
+    },
+    ContextSend {
+        peer_id: String,
+        #[arg(long, default_value = "{}")]
+        context: String,
+        #[arg(long)]
+        capability: Option<String>,
+        #[arg(long)]
+        title: Option<String>,
+        #[arg(long = "tag")]
+        tags: Vec<String>,
+        #[arg(long)]
+        ttl_secs: Option<u64>,
+        #[arg(long)]
+        home: Option<PathBuf>,
+    },
+    ArtifactOffer {
+        peer_id: String,
+        path: PathBuf,
+        #[arg(long)]
+        capability: Option<String>,
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long)]
+        mime_type: Option<String>,
+        #[arg(long)]
+        note: Option<String>,
+        #[arg(long)]
+        home: Option<PathBuf>,
+    },
+    ArtifactFetch {
+        peer_id: String,
+        artifact_id: String,
+        #[arg(long)]
+        capability: Option<String>,
+        #[arg(long)]
+        home: Option<PathBuf>,
+    },
+    Artifacts {
+        #[arg(long)]
+        home: Option<PathBuf>,
+    },
+    Delegate {
+        peer_id: String,
+        task_type: String,
+        #[arg(long)]
+        instruction: String,
+        #[arg(long, default_value = "{}")]
+        input: String,
+        #[arg(long)]
+        capability: Option<String>,
+        #[arg(long)]
+        context: Option<String>,
+        #[arg(long)]
+        max_output_chars: Option<usize>,
         #[arg(long)]
         home: Option<PathBuf>,
     },
@@ -278,6 +371,11 @@ pub async fn main_entry() -> Result<()> {
             agent_description,
             interests,
             bootstrap_urls,
+            cooperate,
+            executor_mode,
+            executor_url,
+            executor_model,
+            executor_api_key_env,
             with_hermes,
             launch_agent,
             hermes_home,
@@ -305,6 +403,11 @@ pub async fn main_entry() -> Result<()> {
             } else if config.bootstrap_urls.is_empty() {
                 config.bootstrap_urls = AgentMeshConfig::default_bootstrap_urls();
             }
+            config.cooperate_enabled = cooperate;
+            config.executor_mode = executor_mode;
+            config.executor_url = executor_url;
+            config.executor_model = executor_model;
+            config.executor_api_key_env = executor_api_key_env;
             config.persist(&home)?;
             let service = MeshService::bootstrap(&home, config.clone()).await?;
             if with_hermes {
@@ -317,8 +420,7 @@ pub async fn main_entry() -> Result<()> {
             };
             let daemon_ready = if launch_agent {
                 let mut ready =
-                    wait_for_daemon(&config.control_url(), std::time::Duration::from_secs(6))
-                        .await;
+                    wait_for_daemon(&config.control_url(), std::time::Duration::from_secs(6)).await;
                 if !ready {
                     let _ = spawn_detached_daemon(&home);
                     ready =
@@ -374,6 +476,11 @@ pub async fn main_entry() -> Result<()> {
             relay_poll_interval_secs,
             direct_connect_timeout_secs,
             peer_exchange_interval_secs,
+            cooperate,
+            executor_mode,
+            executor_url,
+            executor_model,
+            executor_api_key_env,
         } => {
             let home = home.unwrap_or_else(AgentMeshConfig::home_dir);
             let bootstrap_urls = if bootstrap_urls.is_empty() {
@@ -400,6 +507,11 @@ pub async fn main_entry() -> Result<()> {
                 relay_poll_interval_secs,
                 direct_connect_timeout_secs,
                 peer_exchange_interval_secs,
+                cooperate_enabled: cooperate,
+                executor_mode,
+                executor_url,
+                executor_model,
+                executor_api_key_env,
                 ..AgentMeshConfig::default()
             };
             let service = MeshService::bootstrap(&home, config).await?;
@@ -414,8 +526,7 @@ pub async fn main_entry() -> Result<()> {
                 let config = AgentMeshConfig::load_or_create(&home)?;
                 spawn_detached_daemon(&home)?;
                 let ready =
-                    wait_for_daemon(&config.control_url(), std::time::Duration::from_secs(6))
-                        .await;
+                    wait_for_daemon(&config.control_url(), std::time::Duration::from_secs(6)).await;
                 println!(
                     "{}",
                     serde_json::to_string_pretty(&json!({
@@ -443,11 +554,20 @@ pub async fn main_entry() -> Result<()> {
             let mut profile = json!({
                 "agent_label": cfg.agent_label,
                 "agent_description": cfg.agent_description,
+                "node_type": "agent",
+                "runtime_name": "wildmesh",
                 "interests": cfg.interests,
                 "control_url": cfg.control_url(),
                 "p2p_endpoint": cfg.p2p_endpoint(),
                 "public_api_url": cfg.public_api_url(),
                 "bootstrap_urls": cfg.bootstrap_urls,
+                "collaboration": {
+                    "cooperate_enabled": cfg.cooperate_enabled,
+                    "executor_mode": cfg.executor_mode,
+                    "accepts_context_capsules": true,
+                    "accepts_artifact_exchange": true,
+                    "accepts_delegate_work": cfg.cooperate_enabled && cfg.executor_mode != "disabled"
+                },
                 "nat_status": "unknown",
                 "public_address": Value::Null,
                 "listen_addrs": [],
@@ -457,11 +577,41 @@ pub async fn main_entry() -> Result<()> {
             if let Ok(status) = get_json(Some(home.clone()), "/v1/status").await {
                 if let Some(reachability) = status.get("reachability").cloned() {
                     if let Some(map) = profile.as_object_mut() {
-                        map.insert("nat_status".to_string(), reachability.get("nat_status").cloned().unwrap_or(Value::String("unknown".to_string())));
-                        map.insert("public_address".to_string(), reachability.get("public_address").cloned().unwrap_or(Value::Null));
-                        map.insert("listen_addrs".to_string(), reachability.get("listen_addrs").cloned().unwrap_or_else(|| json!([])));
-                        map.insert("external_addrs".to_string(), reachability.get("external_addrs").cloned().unwrap_or_else(|| json!([])));
-                        map.insert("upnp_mapped_addrs".to_string(), reachability.get("upnp_mapped_addrs").cloned().unwrap_or_else(|| json!([])));
+                        map.insert(
+                            "nat_status".to_string(),
+                            reachability
+                                .get("nat_status")
+                                .cloned()
+                                .unwrap_or(Value::String("unknown".to_string())),
+                        );
+                        map.insert(
+                            "public_address".to_string(),
+                            reachability
+                                .get("public_address")
+                                .cloned()
+                                .unwrap_or(Value::Null),
+                        );
+                        map.insert(
+                            "listen_addrs".to_string(),
+                            reachability
+                                .get("listen_addrs")
+                                .cloned()
+                                .unwrap_or_else(|| json!([])),
+                        );
+                        map.insert(
+                            "external_addrs".to_string(),
+                            reachability
+                                .get("external_addrs")
+                                .cloned()
+                                .unwrap_or_else(|| json!([])),
+                        );
+                        map.insert(
+                            "upnp_mapped_addrs".to_string(),
+                            reachability
+                                .get("upnp_mapped_addrs")
+                                .cloned()
+                                .unwrap_or_else(|| json!([])),
+                        );
                     }
                 }
             }
@@ -501,7 +651,9 @@ pub async fn main_entry() -> Result<()> {
                     "bootstrap_urls": cfg.bootstrap_urls,
                 }))
             );
-            println!("profile updated; restart the daemon for outbound announcements to reflect changes");
+            println!(
+                "profile updated; restart the daemon for outbound announcements to reflect changes"
+            );
         }
         Commands::AddPeer {
             peer_id,
@@ -564,12 +716,9 @@ pub async fn main_entry() -> Result<()> {
             });
             println!(
                 "{}",
-                serde_json::to_string_pretty(&post_json(
-                    home,
-                    "/v1/capabilities/grants",
-                    &payload
-                )
-                .await?)?
+                serde_json::to_string_pretty(
+                    &post_json(home, "/v1/capabilities/grants", &payload).await?
+                )?
             );
         }
         Commands::Subscribe { topic, home } => {
@@ -581,10 +730,155 @@ pub async fn main_entry() -> Result<()> {
                 )?
             );
         }
+        Commands::Cooperate {
+            home,
+            enable,
+            disable,
+            executor_mode,
+            executor_url,
+            executor_model,
+            executor_api_key_env,
+        } => {
+            if enable && disable {
+                bail!("--enable and --disable are mutually exclusive");
+            }
+            let home = home.unwrap_or_else(AgentMeshConfig::home_dir);
+            let mut cfg = AgentMeshConfig::load_or_create(&home)?;
+            if enable {
+                cfg.cooperate_enabled = true;
+            }
+            if disable {
+                cfg.cooperate_enabled = false;
+            }
+            if let Some(value) = executor_mode {
+                cfg.executor_mode = value;
+            }
+            if let Some(value) = executor_url {
+                cfg.executor_url = Some(value);
+            }
+            if let Some(value) = executor_model {
+                cfg.executor_model = Some(value);
+            }
+            if let Some(value) = executor_api_key_env {
+                cfg.executor_api_key_env = Some(value);
+            }
+            cfg.persist(&home)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json!({
+                    "home": home,
+                    "cooperate_enabled": cfg.cooperate_enabled,
+                    "executor_mode": cfg.executor_mode,
+                    "executor_url": cfg.executor_url,
+                    "executor_model": cfg.executor_model,
+                    "executor_api_key_env": cfg.executor_api_key_env,
+                    "note": "restart the daemon if it is already running",
+                }))?
+            );
+        }
         Commands::Subscriptions { home } => {
             println!(
                 "{}",
                 serde_json::to_string_pretty(&get_json(home, "/v1/subscriptions").await?)?
+            );
+        }
+        Commands::ContextSend {
+            peer_id,
+            context,
+            capability,
+            title,
+            tags,
+            ttl_secs,
+            home,
+        } => {
+            let payload = json!({
+                "peer_id": peer_id,
+                "capability": capability,
+                "title": title,
+                "tags": tags,
+                "ttl_secs": ttl_secs,
+                "context": serde_json::from_str::<Value>(&context).context("parse --context as JSON")?,
+            });
+            println!(
+                "{}",
+                serde_json::to_string_pretty(
+                    &post_json(home, "/v1/context/send", &payload).await?
+                )?
+            );
+        }
+        Commands::ArtifactOffer {
+            peer_id,
+            path,
+            capability,
+            name,
+            mime_type,
+            note,
+            home,
+        } => {
+            let payload = json!({
+                "peer_id": peer_id,
+                "path": path,
+                "capability": capability,
+                "name": name,
+                "mime_type": mime_type,
+                "note": note,
+            });
+            println!(
+                "{}",
+                serde_json::to_string_pretty(
+                    &post_json(home, "/v1/artifacts/offer", &payload).await?
+                )?
+            );
+        }
+        Commands::ArtifactFetch {
+            peer_id,
+            artifact_id,
+            capability,
+            home,
+        } => {
+            let payload = json!({
+                "peer_id": peer_id,
+                "artifact_id": artifact_id,
+                "capability": capability,
+            });
+            println!(
+                "{}",
+                serde_json::to_string_pretty(
+                    &post_json(home, "/v1/artifacts/fetch", &payload).await?
+                )?
+            );
+        }
+        Commands::Artifacts { home } => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&get_json(home, "/v1/artifacts").await?)?
+            );
+        }
+        Commands::Delegate {
+            peer_id,
+            task_type,
+            instruction,
+            input,
+            capability,
+            context,
+            max_output_chars,
+            home,
+        } => {
+            let payload = json!({
+                "peer_id": peer_id,
+                "task_type": task_type,
+                "instruction": instruction,
+                "input": serde_json::from_str::<Value>(&input).context("parse --input as JSON")?,
+                "capability": capability,
+                "context": match context {
+                    Some(value) => Some(serde_json::from_str::<Value>(&value).context("parse --context as JSON")?),
+                    None => None,
+                },
+                "max_output_chars": max_output_chars,
+            });
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&post_json(home, "/v1/delegate", &payload).await?)?
             );
         }
         Commands::Send {
@@ -615,12 +909,9 @@ pub async fn main_entry() -> Result<()> {
             });
             println!(
                 "{}",
-                serde_json::to_string_pretty(&post_json(
-                    home,
-                    "/v1/messages/broadcast",
-                    &payload
-                )
-                .await?)?
+                serde_json::to_string_pretty(
+                    &post_json(home, "/v1/messages/broadcast", &payload).await?
+                )?
             );
         }
         Commands::Inbox { limit, home } => {
@@ -652,15 +943,17 @@ pub async fn main_entry() -> Result<()> {
             }
             println!(
                 "{}",
-                serde_json::to_string_pretty(&post_json(
-                    home,
-                    "/v1/discovery/announce",
-                    &json!({
-                        "host": target_host,
-                        "port": target_port,
-                    }),
-                )
-                .await?)?
+                serde_json::to_string_pretty(
+                    &post_json(
+                        home,
+                        "/v1/discovery/announce",
+                        &json!({
+                            "host": target_host,
+                            "port": target_port,
+                        }),
+                    )
+                    .await?
+                )?
             );
         }
     }
@@ -681,6 +974,12 @@ fn map_kind(kind: &str) -> Result<&'static str> {
         "peer_exchange" => Ok("peer_exchange"),
         "task_offer" => Ok("task_offer"),
         "task_result" => Ok("task_result"),
+        "context_capsule" => Ok("context_capsule"),
+        "artifact_offer" => Ok("artifact_offer"),
+        "artifact_fetch" => Ok("artifact_fetch"),
+        "artifact_payload" => Ok("artifact_payload"),
+        "delegate_request" => Ok("delegate_request"),
+        "delegate_result" => Ok("delegate_result"),
         "note" => Ok("note"),
         "receipt" => Ok("receipt"),
         _ => bail!("unknown kind: {kind}"),
@@ -705,7 +1004,10 @@ async fn get_json(home: Option<PathBuf>, path: &str) -> Result<Value> {
 
 async fn wait_for_daemon(control_url: &str, timeout: std::time::Duration) -> bool {
     let deadline = std::time::Instant::now() + timeout;
-    let client = match Client::builder().timeout(std::time::Duration::from_secs(1)).build() {
+    let client = match Client::builder()
+        .timeout(std::time::Duration::from_secs(1))
+        .build()
+    {
         Ok(client) => client,
         Err(_) => return false,
     };
@@ -803,11 +1105,32 @@ fn render_profile(profile: &Value) -> String {
         .get("public_address")
         .and_then(Value::as_str)
         .unwrap_or("<none>");
+    let collaboration = profile
+        .get("collaboration")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let cooperate_enabled = collaboration
+        .get("cooperate_enabled")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let executor_mode = collaboration
+        .get("executor_mode")
+        .and_then(Value::as_str)
+        .unwrap_or("disabled");
     format!(
-        "agent_label: {label}\nagent_description: {description}\ninterests: {interests}\ncontrol_url: {}\np2p_endpoint: {}\npublic_api_url: {}\nbootstrap_urls: {bootstrap_urls}\nnat_status: {nat_status}\npublic_address: {public_address}",
-        profile.get("control_url").and_then(Value::as_str).unwrap_or("<unknown>"),
-        profile.get("p2p_endpoint").and_then(Value::as_str).unwrap_or("<unknown>"),
-        profile.get("public_api_url").and_then(Value::as_str).unwrap_or("<unknown>"),
+        "agent_label: {label}\nagent_description: {description}\ninterests: {interests}\ncontrol_url: {}\np2p_endpoint: {}\npublic_api_url: {}\nbootstrap_urls: {bootstrap_urls}\nnat_status: {nat_status}\npublic_address: {public_address}\ncooperate_enabled: {cooperate_enabled}\nexecutor_mode: {executor_mode}",
+        profile
+            .get("control_url")
+            .and_then(Value::as_str)
+            .unwrap_or("<unknown>"),
+        profile
+            .get("p2p_endpoint")
+            .and_then(Value::as_str)
+            .unwrap_or("<unknown>"),
+        profile
+            .get("public_api_url")
+            .and_then(Value::as_str)
+            .unwrap_or("<unknown>"),
     )
 }
 
@@ -829,9 +1152,14 @@ async fn run_browse(
         first_pass = false;
         let peers = get_json(home.clone(), "/v1/peers").await?;
         let mut peers = peers.as_array().cloned().unwrap_or_default();
-        peers.retain(|peer| matches_peer(peer, interest.as_deref(), text.as_deref(), discovered_only));
+        peers.retain(|peer| {
+            matches_peer(peer, interest.as_deref(), text.as_deref(), discovered_only)
+        });
         if json_output {
-            println!("{}", serde_json::to_string_pretty(&Value::Array(peers.clone()))?);
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&Value::Array(peers.clone()))?
+            );
         } else {
             print!("\x1b[2J\x1b[H");
             println!("{}", render_peer_table(&peers));
@@ -862,7 +1190,9 @@ async fn run_roam(home: Option<PathBuf>, discovered_only: bool) -> Result<()> {
         .await?;
         refresh = false;
         println!();
-        println!("commands: refresh | interest <term> | text <term> | clear | inspect <peer-prefix> | help | quit");
+        println!(
+            "commands: refresh | interest <term> | text <term> | clear | inspect <peer-prefix> | help | quit"
+        );
         print!("wildmesh> ");
         io::stdout().flush()?;
         let mut line = String::new();
@@ -925,8 +1255,18 @@ async fn run_roam(home: Option<PathBuf>, discovered_only: bool) -> Result<()> {
     Ok(())
 }
 
-fn matches_peer(peer: &Value, interest: Option<&str>, text: Option<&str>, discovered_only: bool) -> bool {
-    if discovered_only && !peer.get("discovered").and_then(Value::as_bool).unwrap_or(false) {
+fn matches_peer(
+    peer: &Value,
+    interest: Option<&str>,
+    text: Option<&str>,
+    discovered_only: bool,
+) -> bool {
+    if discovered_only
+        && !peer
+            .get("discovered")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    {
         return false;
     }
     if let Some(interest) = interest {
@@ -935,7 +1275,10 @@ fn matches_peer(peer: &Value, interest: Option<&str>, text: Option<&str>, discov
             .get("interests")
             .and_then(Value::as_array)
             .map(|values| {
-                values.iter().filter_map(Value::as_str).any(|value| value.to_lowercase().contains(&interest))
+                values
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .any(|value| value.to_lowercase().contains(&interest))
             })
             .unwrap_or(false);
         if !matches {
@@ -945,10 +1288,18 @@ fn matches_peer(peer: &Value, interest: Option<&str>, text: Option<&str>, discov
     if let Some(text) = text {
         let text = text.to_lowercase();
         let haystack = [
-            peer.get("peer_id").and_then(Value::as_str).unwrap_or_default(),
-            peer.get("label").and_then(Value::as_str).unwrap_or_default(),
-            peer.get("agent_label").and_then(Value::as_str).unwrap_or_default(),
-            peer.get("agent_description").and_then(Value::as_str).unwrap_or_default(),
+            peer.get("peer_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+            peer.get("label")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+            peer.get("agent_label")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+            peer.get("agent_description")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
             peer.get("host").and_then(Value::as_str).unwrap_or_default(),
         ]
         .join(" ")
@@ -975,7 +1326,10 @@ fn render_peer_table(peers: &[Value]) -> String {
         ),
     ];
     for peer in peers {
-        let peer_id = peer.get("peer_id").and_then(Value::as_str).unwrap_or_default();
+        let peer_id = peer
+            .get("peer_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         let short_peer = &peer_id[..peer_id.len().min(12)];
         let agent = peer
             .get("agent_label")
@@ -985,7 +1339,13 @@ fn render_peer_table(peers: &[Value]) -> String {
         let interests = peer
             .get("interests")
             .and_then(Value::as_array)
-            .map(|values| values.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(","))
+            .map(|values| {
+                values
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join(",")
+            })
             .filter(|joined| !joined.is_empty())
             .unwrap_or_else(|| "-".to_string());
         let endpoint = format!(
@@ -1024,7 +1384,10 @@ fn truncate(value: &str, width: usize) -> String {
     if value.chars().count() <= width {
         return value.to_string();
     }
-    let mut truncated = value.chars().take(width.saturating_sub(1)).collect::<String>();
+    let mut truncated = value
+        .chars()
+        .take(width.saturating_sub(1))
+        .collect::<String>();
     truncated.push('…');
     truncated
 }
@@ -1053,23 +1416,34 @@ async fn run_sidecar(home: Option<PathBuf>) -> Result<()> {
             }
         };
         let response = match value.get("op").and_then(Value::as_str) {
-            Some("status") => client
-                .get(format!("{base}/v1/status"))
-                .send()
-                .await?
-                .error_for_status()?
-                .json::<Value>()
-                .await?,
+            Some("status") => {
+                client
+                    .get(format!("{base}/v1/status"))
+                    .send()
+                    .await?
+                    .error_for_status()?
+                    .json::<Value>()
+                    .await?
+            }
             Some("profile") => {
                 let cfg = AgentMeshConfig::load_or_create(&config_home)?;
                 let mut profile = json!({
                     "agent_label": cfg.agent_label,
                     "agent_description": cfg.agent_description,
+                    "node_type": "agent",
+                    "runtime_name": "wildmesh",
                     "interests": cfg.interests,
                     "control_url": cfg.control_url(),
                     "p2p_endpoint": cfg.p2p_endpoint(),
                     "public_api_url": cfg.public_api_url(),
                     "bootstrap_urls": cfg.bootstrap_urls,
+                    "collaboration": {
+                        "cooperate_enabled": cfg.cooperate_enabled,
+                        "executor_mode": cfg.executor_mode,
+                        "accepts_context_capsules": true,
+                        "accepts_artifact_exchange": true,
+                        "accepts_delegate_work": cfg.cooperate_enabled && cfg.executor_mode != "disabled"
+                    },
                     "nat_status": "unknown",
                     "public_address": Value::Null,
                     "listen_addrs": [],
@@ -1086,11 +1460,41 @@ async fn run_sidecar(home: Option<PathBuf>) -> Result<()> {
                 {
                     if let Some(reachability) = status.get("reachability").cloned() {
                         if let Some(map) = profile.as_object_mut() {
-                            map.insert("nat_status".to_string(), reachability.get("nat_status").cloned().unwrap_or(Value::String("unknown".to_string())));
-                            map.insert("public_address".to_string(), reachability.get("public_address").cloned().unwrap_or(Value::Null));
-                            map.insert("listen_addrs".to_string(), reachability.get("listen_addrs").cloned().unwrap_or_else(|| json!([])));
-                            map.insert("external_addrs".to_string(), reachability.get("external_addrs").cloned().unwrap_or_else(|| json!([])));
-                            map.insert("upnp_mapped_addrs".to_string(), reachability.get("upnp_mapped_addrs").cloned().unwrap_or_else(|| json!([])));
+                            map.insert(
+                                "nat_status".to_string(),
+                                reachability
+                                    .get("nat_status")
+                                    .cloned()
+                                    .unwrap_or(Value::String("unknown".to_string())),
+                            );
+                            map.insert(
+                                "public_address".to_string(),
+                                reachability
+                                    .get("public_address")
+                                    .cloned()
+                                    .unwrap_or(Value::Null),
+                            );
+                            map.insert(
+                                "listen_addrs".to_string(),
+                                reachability
+                                    .get("listen_addrs")
+                                    .cloned()
+                                    .unwrap_or_else(|| json!([])),
+                            );
+                            map.insert(
+                                "external_addrs".to_string(),
+                                reachability
+                                    .get("external_addrs")
+                                    .cloned()
+                                    .unwrap_or_else(|| json!([])),
+                            );
+                            map.insert(
+                                "upnp_mapped_addrs".to_string(),
+                                reachability
+                                    .get("upnp_mapped_addrs")
+                                    .cloned()
+                                    .unwrap_or_else(|| json!([])),
+                            );
                         }
                     }
                 }
@@ -1119,7 +1523,10 @@ async fn run_sidecar(home: Option<PathBuf>) -> Result<()> {
                         peer.get("interests")
                             .and_then(Value::as_array)
                             .map(|values| {
-                                values.iter().filter_map(Value::as_str).any(|item| item.to_lowercase().contains(&interest))
+                                values
+                                    .iter()
+                                    .filter_map(Value::as_str)
+                                    .any(|item| item.to_lowercase().contains(&interest))
                             })
                             .unwrap_or(false)
                     });
@@ -1128,10 +1535,18 @@ async fn run_sidecar(home: Option<PathBuf>) -> Result<()> {
                     let text = text.to_lowercase();
                     items.retain(|peer| {
                         [
-                            peer.get("peer_id").and_then(Value::as_str).unwrap_or_default(),
-                            peer.get("label").and_then(Value::as_str).unwrap_or_default(),
-                            peer.get("agent_label").and_then(Value::as_str).unwrap_or_default(),
-                            peer.get("agent_description").and_then(Value::as_str).unwrap_or_default(),
+                            peer.get("peer_id")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default(),
+                            peer.get("label")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default(),
+                            peer.get("agent_label")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default(),
+                            peer.get("agent_description")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default(),
                             peer.get("host").and_then(Value::as_str).unwrap_or_default(),
                         ]
                         .join(" ")
@@ -1144,67 +1559,126 @@ async fn run_sidecar(home: Option<PathBuf>) -> Result<()> {
                     .and_then(Value::as_bool)
                     .unwrap_or(false)
                 {
-                    items.retain(|peer| peer.get("discovered").and_then(Value::as_bool).unwrap_or(false));
+                    items.retain(|peer| {
+                        peer.get("discovered")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false)
+                    });
                 }
                 json!({"items": items})
             }
-            Some("add_peer") => client
-                .post(format!("{base}/v1/peers"))
-                .json(&value["payload"])
-                .send()
-                .await?
-                .error_for_status()?
-                .json::<Value>()
-                .await?,
-            Some("grant") => client
-                .post(format!("{base}/v1/capabilities/grants"))
-                .json(&value["payload"])
-                .send()
-                .await?
-                .error_for_status()?
-                .json::<Value>()
-                .await?,
-            Some("subscribe") => client
-                .post(format!("{base}/v1/subscriptions"))
-                .json(&value["payload"])
-                .send()
-                .await?
-                .error_for_status()?
-                .json::<Value>()
-                .await?,
+            Some("add_peer") => {
+                client
+                    .post(format!("{base}/v1/peers"))
+                    .json(&value["payload"])
+                    .send()
+                    .await?
+                    .error_for_status()?
+                    .json::<Value>()
+                    .await?
+            }
+            Some("grant") => {
+                client
+                    .post(format!("{base}/v1/capabilities/grants"))
+                    .json(&value["payload"])
+                    .send()
+                    .await?
+                    .error_for_status()?
+                    .json::<Value>()
+                    .await?
+            }
+            Some("subscribe") => {
+                client
+                    .post(format!("{base}/v1/subscriptions"))
+                    .json(&value["payload"])
+                    .send()
+                    .await?
+                    .error_for_status()?
+                    .json::<Value>()
+                    .await?
+            }
             Some("list_subscriptions") => {
                 json!({"items": client.get(format!("{base}/v1/subscriptions")).send().await?.error_for_status()?.json::<Value>().await?})
             }
-            Some("send") => client
-                .post(format!("{base}/v1/messages/send"))
-                .json(&value["payload"])
-                .send()
-                .await?
-                .error_for_status()?
-                .json::<Value>()
-                .await?,
-            Some("broadcast") => client
-                .post(format!("{base}/v1/messages/broadcast"))
-                .json(&value["payload"])
-                .send()
-                .await?
-                .error_for_status()?
-                .json::<Value>()
-                .await?,
+            Some("send_context") => {
+                client
+                    .post(format!("{base}/v1/context/send"))
+                    .json(&value["payload"])
+                    .send()
+                    .await?
+                    .error_for_status()?
+                    .json::<Value>()
+                    .await?
+            }
+            Some("list_artifacts") => {
+                json!({"items": client.get(format!("{base}/v1/artifacts")).send().await?.error_for_status()?.json::<Value>().await?})
+            }
+            Some("offer_artifact") => {
+                client
+                    .post(format!("{base}/v1/artifacts/offer"))
+                    .json(&value["payload"])
+                    .send()
+                    .await?
+                    .error_for_status()?
+                    .json::<Value>()
+                    .await?
+            }
+            Some("fetch_artifact") => {
+                client
+                    .post(format!("{base}/v1/artifacts/fetch"))
+                    .json(&value["payload"])
+                    .send()
+                    .await?
+                    .error_for_status()?
+                    .json::<Value>()
+                    .await?
+            }
+            Some("delegate") => {
+                client
+                    .post(format!("{base}/v1/delegate"))
+                    .json(&value["payload"])
+                    .send()
+                    .await?
+                    .error_for_status()?
+                    .json::<Value>()
+                    .await?
+            }
+            Some("send") => {
+                client
+                    .post(format!("{base}/v1/messages/send"))
+                    .json(&value["payload"])
+                    .send()
+                    .await?
+                    .error_for_status()?
+                    .json::<Value>()
+                    .await?
+            }
+            Some("broadcast") => {
+                client
+                    .post(format!("{base}/v1/messages/broadcast"))
+                    .json(&value["payload"])
+                    .send()
+                    .await?
+                    .error_for_status()?
+                    .json::<Value>()
+                    .await?
+            }
             Some("inbox") => {
                 json!({"items": client.get(format!("{base}/v1/messages/inbox?limit={}", value.get("limit").and_then(Value::as_i64).unwrap_or(50))).send().await?.error_for_status()?.json::<Value>().await?})
             }
             Some("outbox") => {
                 json!({"items": client.get(format!("{base}/v1/messages/outbox?limit={}", value.get("limit").and_then(Value::as_i64).unwrap_or(50))).send().await?.error_for_status()?.json::<Value>().await?})
             }
-            Some("discover_now") => client
-                .post(format!("{base}/v1/discovery/announce"))
-                .json(&value["payload"])
-                .send()
-                .await?
-                .error_for_status()?
-                .json::<Value>()
-                .await?,
+            Some("discover_now") => {
+                client
+                    .post(format!("{base}/v1/discovery/announce"))
+                    .json(&value["payload"])
+                    .send()
+                    .await?
+                    .error_for_status()?
+                    .json::<Value>()
+                    .await?
+            }
             Some(other) => json!({"error": format!("unknown op: {other}")}),
             None => json!({"error": "missing op"}),
         };
@@ -1234,9 +1708,15 @@ fn install_hermes_plugin(asset_root: &Path, hermes_home: &Path) -> Result<()> {
         plugin_target.join("plugin.yaml"),
     )
     .context("copy plugin.yaml")?;
-    fs::copy(asset_root.join("plugin.py"), plugin_target.join("plugin.py"))
-        .context("copy plugin.py")?;
-    copy_dir_all(&asset_root.join("agentmesh"), &plugin_target.join("agentmesh"))?;
+    fs::copy(
+        asset_root.join("plugin.py"),
+        plugin_target.join("plugin.py"),
+    )
+    .context("copy plugin.py")?;
+    copy_dir_all(
+        &asset_root.join("agentmesh"),
+        &plugin_target.join("agentmesh"),
+    )?;
     copy_dir_all(&asset_root.join("skill").join("wildmesh"), &skill_target)?;
     println!("installed plugin -> {}", plugin_target.display());
     println!("installed skill -> {}", skill_target.display());
@@ -1302,7 +1782,11 @@ fn install_launch_agent(home: &Path) -> Result<PathBuf> {
         )
         .context("run launchctl bootstrap")?;
         let _ = run_launchctl(
-            ["kickstart", "-k", &format!("{domain}/com.nativ3ai.wildmesh")],
+            [
+                "kickstart",
+                "-k",
+                &format!("{domain}/com.nativ3ai.wildmesh"),
+            ],
             true,
         );
         Ok(plist_path)
@@ -1334,10 +1818,7 @@ fn run_launchctl<const N: usize>(args: [&str; N], tolerate_failure: bool) -> Res
 }
 
 fn current_uid() -> Result<u32> {
-    let output = Command::new("id")
-        .arg("-u")
-        .output()
-        .context("run id -u")?;
+    let output = Command::new("id").arg("-u").output().context("run id -u")?;
     if !output.status.success() {
         bail!("id -u failed");
     }

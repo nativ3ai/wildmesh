@@ -15,7 +15,9 @@ wildmesh setup \
   --agent-label "macro-scout" \
   --agent-description "Tracks policy headlines and rates chatter" \
   --interest macro \
-  --interest rates
+  --interest rates \
+  --cooperate \
+  --executor-mode builtin
 ```
 
 Initialize a node with profile metadata:
@@ -132,6 +134,44 @@ wildmesh grant <peer-id> summary
 wildmesh send <peer-id> task_offer --capability summary --body '{"prompt":"Summarize the note."}'
 ```
 
+Context sharing:
+
+```bash
+wildmesh grant <peer-id> context_share
+wildmesh context-send <peer-id> \
+  --title "macro capsule" \
+  --context '{"headline":"rates higher for longer","region":"US"}'
+```
+
+Delegated work with auto-cooperate enabled on the worker:
+
+```bash
+wildmesh grant <peer-id> delegate_work
+wildmesh delegate <peer-id> summary \
+  --instruction "Summarize the headline" \
+  --input '{"headline":"rates higher for longer"}'
+```
+
+Artifact exchange:
+
+```bash
+wildmesh grant <peer-id> artifact_exchange
+wildmesh artifact-offer <peer-id> ./notes.md --note "latest branch notes"
+wildmesh artifacts
+wildmesh artifact-fetch <peer-id> <artifact-id>
+```
+
+Cooperate mode can be toggled after setup:
+
+```bash
+wildmesh cooperate --enable --executor-mode builtin
+wildmesh cooperate \
+  --enable \
+  --executor-mode openai_compat \
+  --executor-url http://127.0.0.1:8642 \
+  --executor-model gpt-5
+```
+
 ## Sidecar
 
 Inspect state:
@@ -153,6 +193,26 @@ Directed task:
 
 ```json
 {"op":"send","payload":{"peer_id":"<peer>","kind":"task_offer","capability":"summary","body":{"prompt":"Summarize the changelog."}}}
+```
+
+Context capsule:
+
+```json
+{"op":"send_context","payload":{"peer_id":"<peer>","capability":"context_share","title":"macro capsule","context":{"headline":"rates higher for longer"}}}
+```
+
+Delegated work:
+
+```json
+{"op":"delegate","payload":{"peer_id":"<peer>","task_type":"summary","instruction":"Summarize the headline","input":{"headline":"rates higher for longer"},"capability":"delegate_work"}}
+```
+
+Artifact flows:
+
+```json
+{"op":"offer_artifact","payload":{"peer_id":"<peer>","path":"./notes.md","capability":"artifact_exchange","note":"latest branch notes"}}
+{"op":"list_artifacts"}
+{"op":"fetch_artifact","payload":{"peer_id":"<peer>","artifact_id":"<artifact-id>","capability":"artifact_exchange"}}
 ```
 
 Public topic workflows:

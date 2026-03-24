@@ -36,6 +36,10 @@ pub struct PeerRecord {
     pub label: Option<String>,
     pub agent_label: Option<String>,
     pub agent_description: Option<String>,
+    #[serde(default)]
+    pub node_type: Option<String>,
+    #[serde(default)]
+    pub runtime_name: Option<String>,
     pub interests: Vec<String>,
     pub host: String,
     pub port: u16,
@@ -46,6 +50,12 @@ pub struct PeerRecord {
     pub discovered: bool,
     pub last_seen_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
+    #[serde(default)]
+    pub accepts_context_capsules: bool,
+    #[serde(default)]
+    pub accepts_artifact_exchange: bool,
+    #[serde(default)]
+    pub accepts_delegate_work: bool,
     #[serde(default)]
     pub activity_state: Option<String>,
     #[serde(default)]
@@ -69,6 +79,12 @@ pub enum MessageKind {
     PeerExchange,
     TaskOffer,
     TaskResult,
+    ContextCapsule,
+    ArtifactOffer,
+    ArtifactFetch,
+    ArtifactPayload,
+    DelegateRequest,
+    DelegateResult,
     Note,
     Receipt,
 }
@@ -163,6 +179,15 @@ pub struct SendMessageResponse {
 pub struct SubscriptionRecord {
     pub topic: String,
     pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CollaborationView {
+    pub cooperate_enabled: bool,
+    pub executor_mode: String,
+    pub accepts_context_capsules: bool,
+    pub accepts_artifact_exchange: bool,
+    pub accepts_delegate_work: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -267,6 +292,8 @@ pub struct LocalProfile {
     pub peer_id: String,
     pub agent_label: Option<String>,
     pub agent_description: Option<String>,
+    pub node_type: String,
+    pub runtime_name: String,
     pub interests: Vec<String>,
     pub control_url: String,
     pub p2p_endpoint: String,
@@ -274,6 +301,7 @@ pub struct LocalProfile {
     pub bootstrap_urls: Vec<String>,
     pub nat_status: String,
     pub public_address: Option<String>,
+    pub collaboration: CollaborationView,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -312,4 +340,160 @@ pub enum MeshPubsubMessage {
         body: serde_json::Value,
         issued_at: DateTime<Utc>,
     },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContextCapsuleBody {
+    pub title: Option<String>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub ttl_secs: Option<u64>,
+    #[serde(default)]
+    pub context: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArtifactOfferBody {
+    pub artifact_id: String,
+    pub name: String,
+    pub mime_type: String,
+    pub size_bytes: u64,
+    pub sha256: String,
+    #[serde(default)]
+    pub note: Option<String>,
+    #[serde(default)]
+    pub inline_preview: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArtifactFetchBody {
+    pub artifact_id: String,
+    #[serde(default)]
+    pub reply_to_message_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArtifactPayloadBody {
+    pub artifact_id: String,
+    pub name: String,
+    pub mime_type: String,
+    pub size_bytes: u64,
+    pub sha256: String,
+    pub content_base64: String,
+    #[serde(default)]
+    pub note: Option<String>,
+    #[serde(default)]
+    pub reply_to_message_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DelegateRequestBody {
+    pub task_id: String,
+    pub task_type: String,
+    pub instruction: String,
+    #[serde(default)]
+    pub input: serde_json::Value,
+    #[serde(default)]
+    pub context: Option<serde_json::Value>,
+    #[serde(default)]
+    pub max_output_chars: Option<usize>,
+    #[serde(default)]
+    pub reply_to_message_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DelegateResultBody {
+    pub task_id: String,
+    pub task_type: String,
+    pub status: String,
+    pub handled_by: String,
+    #[serde(default)]
+    pub output: serde_json::Value,
+    #[serde(default)]
+    pub summary: Option<String>,
+    #[serde(default)]
+    pub reply_to_message_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContextCapsuleRequest {
+    pub peer_id: String,
+    #[serde(default)]
+    pub capability: Option<String>,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub ttl_secs: Option<u64>,
+    #[serde(default)]
+    pub context: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArtifactOfferRequest {
+    pub peer_id: String,
+    #[serde(default)]
+    pub capability: Option<String>,
+    pub path: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub mime_type: Option<String>,
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArtifactFetchRequest {
+    pub peer_id: String,
+    #[serde(default)]
+    pub capability: Option<String>,
+    pub artifact_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArtifactRecord {
+    pub artifact_id: String,
+    pub name: String,
+    pub mime_type: String,
+    pub size_bytes: u64,
+    pub sha256: String,
+    pub direction: String,
+    #[serde(default)]
+    pub peer_id: Option<String>,
+    #[serde(default)]
+    pub note: Option<String>,
+    pub saved_path: String,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DelegateWorkRequest {
+    pub peer_id: String,
+    #[serde(default)]
+    pub capability: Option<String>,
+    pub task_type: String,
+    pub instruction: String,
+    #[serde(default)]
+    pub input: serde_json::Value,
+    #[serde(default)]
+    pub context: Option<serde_json::Value>,
+    #[serde(default)]
+    pub max_output_chars: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CooperateConfigRequest {
+    #[serde(default)]
+    pub cooperate_enabled: Option<bool>,
+    #[serde(default)]
+    pub executor_mode: Option<String>,
+    #[serde(default)]
+    pub executor_url: Option<String>,
+    #[serde(default)]
+    pub executor_model: Option<String>,
+    #[serde(default)]
+    pub executor_api_key_env: Option<String>,
 }

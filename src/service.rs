@@ -1,22 +1,27 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Result, anyhow, bail};
 use chrono::Utc;
 use serde_json::Value;
 
+use crate::artifact;
 use crate::config::AgentMeshConfig;
 use crate::crypto::{IdentityMaterial, encrypt_for_peer, sign_payload};
+use crate::executor;
 use crate::models::{
-    BroadcastRequest, BroadcastResponse, CapabilityGrant, Envelope, IdentityView, LocalProfile,
-    MessageKind, PeerRecord, SendMessageRequest, SendMessageResponse, StatusResponse,
-    StoredMessage, SubscriptionRecord,
+    ArtifactFetchBody, ArtifactFetchRequest, ArtifactOfferBody, ArtifactOfferRequest,
+    ArtifactRecord, BroadcastRequest, BroadcastResponse, CapabilityGrant, CollaborationView,
+    ContextCapsuleBody, ContextCapsuleRequest, CooperateConfigRequest, DelegateRequestBody,
+    DelegateWorkRequest, Envelope, IdentityView, LocalProfile, MessageKind, PeerRecord,
+    SendMessageRequest, SendMessageResponse, StatusResponse, StoredMessage, SubscriptionRecord,
 };
 use crate::storage::{self, IdentityRow};
 use crate::swarm::{SwarmHandle, spawn_swarm};
 
 #[derive(Clone)]
 pub struct MeshService {
+    pub home: PathBuf,
     pub config: AgentMeshConfig,
     pub pool: sqlx::SqlitePool,
     pub identity: Arc<IdentityMaterial>,
@@ -24,27 +29,68 @@ pub struct MeshService {
 }
 
 impl MeshService {
-    pub fn local_profile(&self) -> LocalProfile {
+    pub fn collaboration_view(&self) -> CollaborationView {
+        CollaborationView {
+            cooperate_enabled: self.config.cooperate_enabled,
+            executor_mode: self.config.executor_mode.clone(),
+            accepts_context_capsules: true,
+            accepts_artifact_exchange: true,
+            accepts_delegate_work: executor::delegate_available(&self.config),
+        }
+    }
+
+    pub fn local_peer_record(&self) -> PeerRecord {
         let peer_id = self.identity.peer_id();
         let default_label = format!("agent-{}", &peer_id[..12]);
-        let reachability = self.swarm.reachability();
-        LocalProfile {
+        PeerRecord {
             peer_id,
+            label: None,
             agent_label: Some(self.config.agent_label.clone().unwrap_or(default_label)),
             agent_description: self.config.agent_description.clone(),
+            node_type: Some("agent".to_string()),
+            runtime_name: Some("wildmesh".to_string()),
             interests: self.config.interests.clone(),
+            host: self.config.advertise_host.clone(),
+            port: self.config.p2p_port,
+            public_key: self.identity.signing_public_b64(),
+            encryption_public_key: self.identity.encryption_public_b64(),
+            relay_url: None,
+            notes: None,
+            discovered: false,
+            last_seen_at: Some(Utc::now()),
+            created_at: Utc::now(),
+            accepts_context_capsules: true,
+            accepts_artifact_exchange: true,
+            accepts_delegate_work: executor::delegate_available(&self.config),
+            activity_state: None,
+            last_seen_age_secs: None,
+        }
+    }
+
+    pub fn local_profile(&self) -> LocalProfile {
+        let reachability = self.swarm.reachability();
+        let peer = self.local_peer_record();
+        LocalProfile {
+            peer_id: peer.peer_id,
+            agent_label: peer.agent_label,
+            agent_description: peer.agent_description,
+            node_type: peer.node_type.unwrap_or_else(|| "agent".to_string()),
+            runtime_name: peer.runtime_name.unwrap_or_else(|| "wildmesh".to_string()),
+            interests: peer.interests,
             control_url: self.config.control_url(),
             p2p_endpoint: self.config.p2p_endpoint(),
             public_api_url: self.config.public_api_url(),
             bootstrap_urls: self.config.bootstrap_urls.clone(),
             nat_status: reachability.nat_status,
             public_address: reachability.public_address,
+            collaboration: self.collaboration_view(),
         }
     }
 
     pub async fn bootstrap(home: &Path, config: AgentMeshConfig) -> Result<Self> {
         std::fs::create_dir_all(home)?;
         config.persist(home)?;
+        artifact::ensure_dirs(home)?;
         let pool = storage::open_pool(&AgentMeshConfig::db_path(home)).await?;
         let identity = if let Some(row) = storage::load_identity(&pool).await? {
             IdentityMaterial::from_b64(&row.signing_secret_key, &row.encryption_secret_key)?
@@ -62,6 +108,7 @@ impl MeshService {
         };
         let swarm = spawn_swarm(home, pool.clone(), config.clone(), identity.clone()).await?;
         Ok(Self {
+            home: home.to_path_buf(),
             config,
             pool,
             identity: Arc::new(identity),
@@ -96,11 +143,13 @@ impl MeshService {
 
     pub async fn add_peer(&self, peer: PeerRecord) -> Result<PeerRecord> {
         storage::upsert_peer(&self.pool, &peer).await?;
-        Ok(present_peer(&self.config, peer.clone(), Utc::now()).unwrap_or_else(|| {
-            let mut peer = peer;
-            peer.activity_state = Some("manual".to_string());
-            peer
-        }))
+        Ok(
+            present_peer(&self.config, peer.clone(), Utc::now()).unwrap_or_else(|| {
+                let mut peer = peer;
+                peer.activity_state = Some("manual".to_string());
+                peer
+            }),
+        )
     }
 
     pub async fn list_peers(&self) -> Result<Vec<PeerRecord>> {
@@ -140,6 +189,10 @@ impl MeshService {
         storage::list_messages(&self.pool, crate::models::MessageDirection::Outbound, limit).await
     }
 
+    pub async fn list_artifacts(&self) -> Result<Vec<ArtifactRecord>> {
+        artifact::list_artifacts(&self.home)
+    }
+
     pub async fn send_message(&self, request: SendMessageRequest) -> Result<SendMessageResponse> {
         let peer = storage::get_peer(&self.pool, &request.peer_id)
             .await?
@@ -157,6 +210,138 @@ impl MeshService {
 
     pub async fn broadcast(&self, request: BroadcastRequest) -> Result<BroadcastResponse> {
         self.swarm.broadcast(request).await
+    }
+
+    pub async fn send_context_capsule(
+        &self,
+        request: ContextCapsuleRequest,
+    ) -> Result<SendMessageResponse> {
+        self.send_message(SendMessageRequest {
+            peer_id: request.peer_id,
+            kind: MessageKind::ContextCapsule,
+            capability: Some(
+                request
+                    .capability
+                    .unwrap_or_else(|| "context_share".to_string()),
+            ),
+            body: serde_json::to_value(ContextCapsuleBody {
+                title: request.title,
+                tags: request.tags,
+                ttl_secs: request.ttl_secs,
+                context: request.context,
+            })?,
+        })
+        .await
+    }
+
+    pub async fn offer_artifact(
+        &self,
+        request: ArtifactOfferRequest,
+    ) -> Result<SendMessageResponse> {
+        let record = artifact::store_artifact_from_path(
+            &self.home,
+            Path::new(&request.path),
+            request.name.as_deref(),
+            request.mime_type.as_deref(),
+            "outgoing",
+            Some(&request.peer_id),
+            request.note.as_deref(),
+        )?;
+        let bytes = std::fs::read(&record.saved_path)?;
+        let preview = if bytes.len() <= 256 && record.mime_type.starts_with("text/") {
+            Some(
+                String::from_utf8_lossy(&bytes)
+                    .chars()
+                    .take(160)
+                    .collect::<String>(),
+            )
+        } else {
+            None
+        };
+        self.send_message(SendMessageRequest {
+            peer_id: request.peer_id,
+            kind: MessageKind::ArtifactOffer,
+            capability: Some(
+                request
+                    .capability
+                    .unwrap_or_else(|| "artifact_exchange".to_string()),
+            ),
+            body: serde_json::to_value(ArtifactOfferBody {
+                artifact_id: record.artifact_id,
+                name: record.name,
+                mime_type: record.mime_type,
+                size_bytes: record.size_bytes,
+                sha256: record.sha256,
+                note: record.note,
+                inline_preview: preview,
+            })?,
+        })
+        .await
+    }
+
+    pub async fn fetch_artifact(
+        &self,
+        request: ArtifactFetchRequest,
+    ) -> Result<SendMessageResponse> {
+        self.send_message(SendMessageRequest {
+            peer_id: request.peer_id,
+            kind: MessageKind::ArtifactFetch,
+            capability: Some(
+                request
+                    .capability
+                    .unwrap_or_else(|| "artifact_exchange".to_string()),
+            ),
+            body: serde_json::to_value(ArtifactFetchBody {
+                artifact_id: request.artifact_id,
+                reply_to_message_id: None,
+            })?,
+        })
+        .await
+    }
+
+    pub async fn delegate_work(&self, request: DelegateWorkRequest) -> Result<SendMessageResponse> {
+        self.send_message(SendMessageRequest {
+            peer_id: request.peer_id,
+            kind: MessageKind::DelegateRequest,
+            capability: Some(
+                request
+                    .capability
+                    .unwrap_or_else(|| "delegate_work".to_string()),
+            ),
+            body: serde_json::to_value(DelegateRequestBody {
+                task_id: uuid::Uuid::new_v4().simple().to_string(),
+                task_type: request.task_type,
+                instruction: request.instruction,
+                input: request.input,
+                context: request.context,
+                max_output_chars: request.max_output_chars,
+                reply_to_message_id: None,
+            })?,
+        })
+        .await
+    }
+
+    pub async fn configure_cooperation(
+        &mut self,
+        request: CooperateConfigRequest,
+    ) -> Result<LocalProfile> {
+        if let Some(enabled) = request.cooperate_enabled {
+            self.config.cooperate_enabled = enabled;
+        }
+        if let Some(executor_mode) = request.executor_mode {
+            self.config.executor_mode = executor_mode;
+        }
+        if let Some(executor_url) = request.executor_url {
+            self.config.executor_url = Some(executor_url);
+        }
+        if let Some(executor_model) = request.executor_model {
+            self.config.executor_model = Some(executor_model);
+        }
+        if let Some(executor_api_key_env) = request.executor_api_key_env {
+            self.config.executor_api_key_env = Some(executor_api_key_env);
+        }
+        self.config.persist(&self.home)?;
+        Ok(self.local_profile())
     }
 
     pub fn build_envelope(
@@ -194,8 +379,9 @@ impl MeshService {
     }
 
     pub async fn announce_to(&self, explicit_target: Option<(String, u16)>) -> Result<()> {
-        if explicit_target.is_some() {
-            bail!("targeted discovery is not supported in libp2p mode");
+        if let Some((host, port)) = explicit_target {
+            self.swarm.dial_target(host, port).await?;
+            return Ok(());
         }
         self.swarm.discover().await
     }
@@ -240,6 +426,8 @@ mod tests {
             label: None,
             agent_label: Some("peer".to_string()),
             agent_description: Some("peer".to_string()),
+            node_type: Some("agent".to_string()),
+            runtime_name: Some("wildmesh".to_string()),
             interests: vec!["mesh".to_string()],
             host: "192.168.1.10".to_string(),
             port: 4500,
@@ -250,6 +438,9 @@ mod tests {
             discovered: true,
             last_seen_at,
             created_at: Utc::now(),
+            accepts_context_capsules: true,
+            accepts_artifact_exchange: true,
+            accepts_delegate_work: true,
             activity_state: None,
             last_seen_age_secs: None,
         }

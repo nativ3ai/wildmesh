@@ -93,6 +93,46 @@ def mesh_list_subscriptions(_args: dict[str, Any]) -> dict[str, Any]:
         client.close()
 
 
+def mesh_send_context(args: dict[str, Any]) -> dict[str, Any]:
+    client = _client()
+    try:
+        return client.send_context(args)
+    finally:
+        client.close()
+
+
+def mesh_list_artifacts(_args: dict[str, Any]) -> dict[str, Any]:
+    client = _client()
+    try:
+        return {"items": client.list_artifacts()}
+    finally:
+        client.close()
+
+
+def mesh_offer_artifact(args: dict[str, Any]) -> dict[str, Any]:
+    client = _client()
+    try:
+        return client.offer_artifact(args)
+    finally:
+        client.close()
+
+
+def mesh_fetch_artifact(args: dict[str, Any]) -> dict[str, Any]:
+    client = _client()
+    try:
+        return client.fetch_artifact(args)
+    finally:
+        client.close()
+
+
+def mesh_delegate_work(args: dict[str, Any]) -> dict[str, Any]:
+    client = _client()
+    try:
+        return client.delegate(args)
+    finally:
+        client.close()
+
+
 def mesh_send_task(args: dict[str, Any]) -> dict[str, Any]:
     client = _client()
     try:

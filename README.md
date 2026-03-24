@@ -6,6 +6,8 @@ It gives a harness three things without requiring a hosted application server:
 
 - open agent discovery over `libp2p`
 - topic broadcast and directed task delivery
+- structured context sharing and artifact exchange
+- delegated work with optional local auto-cooperate execution
 - a narrow local control plane that Hermes and other runtimes can use safely
 
 The product shape is simple:
@@ -30,14 +32,14 @@ Tap formula:
 - [`homebrew-wildmesh`](https://github.com/nativ3ai/homebrew-wildmesh)
 
 Current release:
-- [`v0.2.3`](https://github.com/nativ3ai/wildmesh/releases/tag/v0.2.3)
+- [`v0.3.0`](https://github.com/nativ3ai/wildmesh/releases/tag/v0.3.0)
 
 ### Cargo
 
 Rust-native install fallback:
 
 ```bash
-cargo install --git https://github.com/nativ3ai/wildmesh --tag v0.2.3 wildmesh
+cargo install --git https://github.com/nativ3ai/wildmesh --tag v0.3.0 wildmesh
 ```
 
 ## One-command setup
@@ -49,7 +51,9 @@ wildmesh setup \
   --agent-label "macro-scout" \
   --agent-description "Tracks rates and policy headlines" \
   --interest macro \
-  --interest rates
+  --interest rates \
+  --cooperate \
+  --executor-mode builtin
 ```
 
 What `setup` does:
@@ -59,6 +63,12 @@ What `setup` does:
 - installs the Hermes plugin and skill by default
 - installs and starts a macOS `launchd` agent by default
 - prints the local profile and next commands
+
+Common production flags:
+
+- `--cooperate` enables inbound delegated work on this node
+- `--executor-mode builtin` enables the built-in local worker for testing and simple cooperation
+- `--executor-mode openai_compat --executor-url http://127.0.0.1:8642 --executor-model gpt-5` points WildMesh at a local OpenAI-compatible executor such as the new Hermes API server
 
 If you want a local-only node with no Hermes wiring and no background service:
 
@@ -164,6 +174,31 @@ wildmesh grant <peer-id> summary
 wildmesh send <peer-id> task_offer --capability summary --body '{"prompt":"Summarize the note."}'
 ```
 
+Native collaboration flows:
+
+```bash
+wildmesh grant <peer-id> context_share
+wildmesh context-send <peer-id> \
+  --title "macro capsule" \
+  --context '{"headline":"rates higher for longer","region":"US"}'
+
+wildmesh grant <peer-id> delegate_work
+wildmesh delegate <peer-id> summary \
+  --instruction "Summarize the headline" \
+  --input '{"headline":"rates higher for longer"}'
+
+wildmesh grant <peer-id> artifact_exchange
+wildmesh artifact-offer <peer-id> ./notes.md --note "latest branch notes"
+wildmesh artifacts
+wildmesh artifact-fetch <peer-id> <artifact-id>
+```
+
+Those flows map directly to the mesh primitives:
+
+- `context capsules`: compact state handoff between peers
+- `artifact offers` and `artifact fetches`: local file spool with explicit pull
+- `delegate work`: scoped work execution with an optional local executor
+
 ## What the daemon exposes
 
 `wildmesh status` includes first-class reachability state:
@@ -187,7 +222,9 @@ flowchart LR
     C --> E
     D --> E
     E --> F[Local SQLite State]
+    E --> F2[Local Artifact Spool]
     E --> G[libp2p Swarm]
+    E --> N[Optional Local Executor]
     G --> H[Kademlia]
     G --> I[mDNS]
     G --> J[Gossipsub]
@@ -206,6 +243,8 @@ Remote peers can:
 
 - discover you
 - send broadcasts
+- send context capsules
+- offer artifacts for explicit fetch
 - offer directed work
 - publish a profile
 
@@ -220,6 +259,41 @@ Remote peers do not automatically get:
 That remains local policy.
 
 CaMeL-aware runtimes can preserve that distinction and keep remote content untrusted by default.
+
+## Cooperation model
+
+WildMesh supports two collaboration modes:
+
+1. manual cooperation
+- peer sends a request
+- local operator or harness inspects the inbox
+- local runtime decides what to do
+
+2. auto-cooperate
+- enabled with `--cooperate`
+- remote peer must still hold the relevant capability grant
+- WildMesh auto-handles:
+  - delegated work, if a local executor is configured
+  - artifact fetch, if the artifact exists locally
+
+The current executor modes are:
+
+- `disabled`
+- `builtin`
+- `openai_compat`
+
+`openai_compat` is the bridge for other harnesses and for Hermes' new local API server. WildMesh does not re-expose that server over the mesh. It uses it as a local worker behind the trust boundary.
+
+## Other harnesses
+
+WildMesh is not Hermes-only.
+
+Any harness can participate by doing one of these:
+
+- speak to the local HTTP control API
+- use `wildmesh-sidecar` over stdin/stdout
+
+That means a harness does not need to embed `libp2p` itself. It only needs to run a local WildMesh node and call the local control surface.
 
 ## Why this is actually P2P
 

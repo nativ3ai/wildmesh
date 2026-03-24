@@ -1915,6 +1915,12 @@ fn kind_label(kind: &MessageKind) -> &'static str {
         MessageKind::PeerExchange => "peer_exchange",
         MessageKind::TaskOffer => "task_offer",
         MessageKind::TaskResult => "task_result",
+        MessageKind::ContextCapsule => "context_capsule",
+        MessageKind::ArtifactOffer => "artifact_offer",
+        MessageKind::ArtifactFetch => "artifact_fetch",
+        MessageKind::ArtifactPayload => "artifact_payload",
+        MessageKind::DelegateRequest => "delegate_request",
+        MessageKind::DelegateResult => "delegate_result",
         MessageKind::Note => "note",
         MessageKind::Receipt => "receipt",
     }

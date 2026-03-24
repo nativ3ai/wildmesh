@@ -27,11 +27,20 @@ class AgentMeshClient:
         profile = {
             "agent_label": cfg.agent_label,
             "agent_description": cfg.agent_description,
+            "node_type": "agent",
+            "runtime_name": "wildmesh",
             "interests": cfg.interests or [],
             "control_url": cfg.control_url,
             "p2p_endpoint": cfg.p2p_endpoint,
             "public_api_url": f"http://{cfg.advertise_host}:{cfg.public_api_port}",
             "bootstrap_urls": cfg.bootstrap_urls or [],
+            "collaboration": {
+                "cooperate_enabled": cfg.cooperate_enabled,
+                "executor_mode": cfg.executor_mode,
+                "accepts_context_capsules": True,
+                "accepts_artifact_exchange": True,
+                "accepts_delegate_work": cfg.cooperate_enabled and cfg.executor_mode != "disabled",
+            },
             "nat_status": "unknown",
             "public_address": None,
             "listen_addrs": [],
@@ -67,6 +76,21 @@ class AgentMeshClient:
 
     def subscribe(self, payload: dict[str, Any]) -> dict[str, Any]:
         return self._client.post("/v1/subscriptions", json=payload).raise_for_status().json()
+
+    def send_context(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._client.post("/v1/context/send", json=payload).raise_for_status().json()
+
+    def list_artifacts(self) -> list[dict[str, Any]]:
+        return self._client.get("/v1/artifacts").raise_for_status().json()
+
+    def offer_artifact(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._client.post("/v1/artifacts/offer", json=payload).raise_for_status().json()
+
+    def fetch_artifact(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._client.post("/v1/artifacts/fetch", json=payload).raise_for_status().json()
+
+    def delegate(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._client.post("/v1/delegate", json=payload).raise_for_status().json()
 
     def send(self, payload: dict[str, Any]) -> dict[str, Any]:
         return self._client.post("/v1/messages/send", json=payload).raise_for_status().json()

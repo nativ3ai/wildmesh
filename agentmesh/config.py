@@ -35,6 +35,12 @@ class AgentMeshConfig:
     announce_interval_secs: int = 30
     direct_connect_timeout_secs: int = 2
     peer_exchange_interval_secs: int = 45
+    cooperate_enabled: bool = False
+    executor_mode: str = "disabled"
+    executor_url: str | None = None
+    executor_model: str | None = None
+    executor_api_key_env: str | None = None
+    artifact_inline_limit_bytes: int = 128 * 1024
 
     @property
     def db_path(self) -> Path:
@@ -75,6 +81,12 @@ class AgentMeshConfig:
                     "announce_interval_secs": self.announce_interval_secs,
                     "direct_connect_timeout_secs": self.direct_connect_timeout_secs,
                     "peer_exchange_interval_secs": self.peer_exchange_interval_secs,
+                    "cooperate_enabled": self.cooperate_enabled,
+                    "executor_mode": self.executor_mode,
+                    "executor_url": self.executor_url,
+                    "executor_model": self.executor_model,
+                    "executor_api_key_env": self.executor_api_key_env,
+                    "artifact_inline_limit_bytes": self.artifact_inline_limit_bytes,
                 },
                 indent=2,
             )
@@ -106,4 +118,10 @@ def load_config(home: Path | None = None) -> AgentMeshConfig:
     if not raw.get("bootstrap_urls"):
         raw["bootstrap_urls"] = DEFAULT_BOOTSTRAP_PEERS.copy()
     raw.setdefault("interests", [])
+    raw.setdefault("cooperate_enabled", False)
+    raw.setdefault("executor_mode", "disabled")
+    raw.setdefault("executor_url", None)
+    raw.setdefault("executor_model", None)
+    raw.setdefault("executor_api_key_env", None)
+    raw.setdefault("artifact_inline_limit_bytes", 128 * 1024)
     return AgentMeshConfig(home=root, **raw)

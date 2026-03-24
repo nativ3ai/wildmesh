@@ -39,6 +39,8 @@ async fn init_schema(pool: &SqlitePool) -> Result<()> {
             label TEXT,
             agent_label TEXT,
             agent_description TEXT,
+            node_type TEXT,
+            runtime_name TEXT,
             interests_json TEXT NOT NULL DEFAULT '[]',
             host TEXT NOT NULL,
             port INTEGER NOT NULL,
@@ -48,7 +50,10 @@ async fn init_schema(pool: &SqlitePool) -> Result<()> {
             notes TEXT,
             discovered INTEGER NOT NULL DEFAULT 0,
             last_seen_at TEXT,
-            created_at TEXT NOT NULL
+            created_at TEXT NOT NULL,
+            accepts_context_capsules INTEGER NOT NULL DEFAULT 0,
+            accepts_artifact_exchange INTEGER NOT NULL DEFAULT 0,
+            accepts_delegate_work INTEGER NOT NULL DEFAULT 0
         );
 
         CREATE TABLE IF NOT EXISTS grants (
@@ -125,9 +130,30 @@ async fn init_schema(pool: &SqlitePool) -> Result<()> {
     let _ = sqlx::query("ALTER TABLE peers ADD COLUMN agent_description TEXT")
         .execute(pool)
         .await;
+    let _ = sqlx::query("ALTER TABLE peers ADD COLUMN node_type TEXT")
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("ALTER TABLE peers ADD COLUMN runtime_name TEXT")
+        .execute(pool)
+        .await;
     let _ = sqlx::query("ALTER TABLE peers ADD COLUMN interests_json TEXT NOT NULL DEFAULT '[]'")
         .execute(pool)
         .await;
+    let _ = sqlx::query(
+        "ALTER TABLE peers ADD COLUMN accepts_context_capsules INTEGER NOT NULL DEFAULT 0",
+    )
+    .execute(pool)
+    .await;
+    let _ = sqlx::query(
+        "ALTER TABLE peers ADD COLUMN accepts_artifact_exchange INTEGER NOT NULL DEFAULT 0",
+    )
+    .execute(pool)
+    .await;
+    let _ = sqlx::query(
+        "ALTER TABLE peers ADD COLUMN accepts_delegate_work INTEGER NOT NULL DEFAULT 0",
+    )
+    .execute(pool)
+    .await;
     Ok(())
 }
 
@@ -177,12 +203,18 @@ pub async fn ensure_identity(pool: &SqlitePool, row: &IdentityRow) -> Result<()>
 pub async fn upsert_peer(pool: &SqlitePool, peer: &PeerRecord) -> Result<()> {
     sqlx::query(
         r#"
-        INSERT INTO peers (peer_id, label, agent_label, agent_description, interests_json, host, port, public_key, encryption_public_key, relay_url, notes, discovered, last_seen_at, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO peers (
+            peer_id, label, agent_label, agent_description, node_type, runtime_name, interests_json,
+            host, port, public_key, encryption_public_key, relay_url, notes, discovered, last_seen_at, created_at,
+            accepts_context_capsules, accepts_artifact_exchange, accepts_delegate_work
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(peer_id) DO UPDATE SET
             label=excluded.label,
             agent_label=excluded.agent_label,
             agent_description=excluded.agent_description,
+            node_type=excluded.node_type,
+            runtime_name=excluded.runtime_name,
             interests_json=excluded.interests_json,
             host=excluded.host,
             port=excluded.port,
@@ -191,13 +223,18 @@ pub async fn upsert_peer(pool: &SqlitePool, peer: &PeerRecord) -> Result<()> {
             relay_url=excluded.relay_url,
             notes=excluded.notes,
             discovered=excluded.discovered,
-            last_seen_at=excluded.last_seen_at
+            last_seen_at=excluded.last_seen_at,
+            accepts_context_capsules=excluded.accepts_context_capsules,
+            accepts_artifact_exchange=excluded.accepts_artifact_exchange,
+            accepts_delegate_work=excluded.accepts_delegate_work
         "#,
     )
     .bind(&peer.peer_id)
     .bind(&peer.label)
     .bind(&peer.agent_label)
     .bind(&peer.agent_description)
+    .bind(&peer.node_type)
+    .bind(&peer.runtime_name)
     .bind(serde_json::to_string(&peer.interests)?)
     .bind(&peer.host)
     .bind(i64::from(peer.port))
@@ -208,6 +245,9 @@ pub async fn upsert_peer(pool: &SqlitePool, peer: &PeerRecord) -> Result<()> {
     .bind(if peer.discovered { 1 } else { 0 })
     .bind(peer.last_seen_at.map(|v| v.to_rfc3339()))
     .bind(peer.created_at.to_rfc3339())
+    .bind(if peer.accepts_context_capsules { 1 } else { 0 })
+    .bind(if peer.accepts_artifact_exchange { 1 } else { 0 })
+    .bind(if peer.accepts_delegate_work { 1 } else { 0 })
     .execute(pool)
     .await?;
     Ok(())
@@ -346,6 +386,21 @@ pub async fn message_exists(pool: &SqlitePool, message_id: &str) -> Result<bool>
         .bind(message_id)
         .fetch_optional(pool)
         .await?;
+    Ok(row.is_some())
+}
+
+pub async fn outbound_message_exists_for_peer(
+    pool: &SqlitePool,
+    peer_id: &str,
+    message_id: &str,
+) -> Result<bool> {
+    let row = sqlx::query(
+        "SELECT 1 FROM messages WHERE id = ? AND direction = 'outbound' AND peer_id = ? LIMIT 1",
+    )
+    .bind(message_id)
+    .bind(peer_id)
+    .fetch_optional(pool)
+    .await?;
     Ok(row.is_some())
 }
 
@@ -570,6 +625,11 @@ fn row_to_peer(row: &sqlx::sqlite::SqliteRow) -> Result<PeerRecord> {
         label: row.get("label"),
         agent_label: row.get("agent_label"),
         agent_description: row.get("agent_description"),
+        node_type: row.try_get::<Option<String>, _>("node_type").ok().flatten(),
+        runtime_name: row
+            .try_get::<Option<String>, _>("runtime_name")
+            .ok()
+            .flatten(),
         interests: serde_json::from_str(&row.get::<String, _>("interests_json"))?,
         host: row.get("host"),
         port: row.get::<i64, _>("port") as u16,
@@ -580,6 +640,18 @@ fn row_to_peer(row: &sqlx::sqlite::SqliteRow) -> Result<PeerRecord> {
         discovered: row.get::<i64, _>("discovered") != 0,
         last_seen_at: opt_datetime(row.try_get::<Option<String>, _>("last_seen_at")?)?,
         created_at: parse_datetime(&row.get::<String, _>("created_at"))?,
+        accepts_context_capsules: row
+            .try_get::<i64, _>("accepts_context_capsules")
+            .map(|value| value != 0)
+            .unwrap_or(false),
+        accepts_artifact_exchange: row
+            .try_get::<i64, _>("accepts_artifact_exchange")
+            .map(|value| value != 0)
+            .unwrap_or(false),
+        accepts_delegate_work: row
+            .try_get::<i64, _>("accepts_delegate_work")
+            .map(|value| value != 0)
+            .unwrap_or(false),
         activity_state: None,
         last_seen_age_secs: None,
     })
@@ -645,6 +717,12 @@ fn kind_to_str(value: &MessageKind) -> &'static str {
         MessageKind::PeerExchange => "peer_exchange",
         MessageKind::TaskOffer => "task_offer",
         MessageKind::TaskResult => "task_result",
+        MessageKind::ContextCapsule => "context_capsule",
+        MessageKind::ArtifactOffer => "artifact_offer",
+        MessageKind::ArtifactFetch => "artifact_fetch",
+        MessageKind::ArtifactPayload => "artifact_payload",
+        MessageKind::DelegateRequest => "delegate_request",
+        MessageKind::DelegateResult => "delegate_result",
         MessageKind::Note => "note",
         MessageKind::Receipt => "receipt",
     }
@@ -673,6 +751,12 @@ fn str_to_kind(value: &str) -> MessageKind {
         "broadcast" => MessageKind::Broadcast,
         "peer_exchange" => MessageKind::PeerExchange,
         "task_result" => MessageKind::TaskResult,
+        "context_capsule" => MessageKind::ContextCapsule,
+        "artifact_offer" => MessageKind::ArtifactOffer,
+        "artifact_fetch" => MessageKind::ArtifactFetch,
+        "artifact_payload" => MessageKind::ArtifactPayload,
+        "delegate_request" => MessageKind::DelegateRequest,
+        "delegate_result" => MessageKind::DelegateResult,
         "note" => MessageKind::Note,
         "receipt" => MessageKind::Receipt,
         _ => MessageKind::TaskOffer,
