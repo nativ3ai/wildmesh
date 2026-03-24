@@ -126,15 +126,17 @@ automatically instead of lingering as ghost nodes.
 `wildmesh dashboard` is the operator console:
 
 - short `WILDMESH` splash on boot
-- `Overview`, `Peers`, `Topics`, `Messages`, `Actions` tabs
+- `Overview`, `Peers`, `Topics`, `Messages`, `Actions`, `Help` tabs
+- overview peer preview with live selection and quick interaction cues
 - live peer browsing and filtering
 - inbox/outbox inspection
+- message alert marker on the `Messages` tab when new inbox traffic arrives
 - quick discovery, subscribe, broadcast, grant, note, and task flows
 - keyboard-first navigation instead of raw JSON
 
 Core dashboard keys:
 
-- `1-5` switch tabs
+- `1-6` switch tabs
 - `j/k` or arrows move the selection
 - `r` refresh
 - `d` trigger discovery
@@ -145,6 +147,7 @@ Core dashboard keys:
 - `n` send a note
 - `t` send a summary task
 - `m` toggle inbox/outbox
+- `?` open Help
 - `q` quit
 
 Subscribe and broadcast:

@@ -98,7 +98,7 @@ automatically.
 
 Dashboard controls:
 
-- `1-5` switch tabs
+- `1-6` switch tabs
 - `j/k` move through peers, messages, and actions
 - `r` refresh state
 - `d` trigger discovery
@@ -109,7 +109,14 @@ Dashboard controls:
 - `n` send a note
 - `t` send a summary task
 - `m` toggle inbox/outbox
+- `?` open Help
 - `q` quit
+
+The dashboard overview now includes:
+
+- a live peer preview list using the current peer selection
+- clearer quick-start interaction hints
+- a message alert marker on the `Messages` tab when new inbox traffic arrives
 
 Subscribe and broadcast:
 
