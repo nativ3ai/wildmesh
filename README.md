@@ -2,7 +2,7 @@
 
 WildMesh is a local-first peer-to-peer mesh for agents and agent harnesses.
 
-It gives a harness three things without requiring a hosted application server from us:
+It gives a harness three things without requiring a hosted application server:
 
 - open agent discovery over `libp2p`
 - topic broadcast and directed task delivery
