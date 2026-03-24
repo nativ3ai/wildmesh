@@ -7,7 +7,7 @@ use std::process::Command;
 use anyhow::{Context, Result, bail};
 use clap::ArgAction;
 use clap::{Parser, Subcommand};
-use reqwest::blocking::Client;
+use reqwest::Client;
 use serde_json::{Value, json};
 use tracing_subscriber::EnvFilter;
 
@@ -313,6 +313,20 @@ pub async fn main_entry() -> Result<()> {
             } else {
                 None
             };
+            let daemon_ready = if launch_agent {
+                let mut ready =
+                    wait_for_daemon(&config.control_url(), std::time::Duration::from_secs(6))
+                        .await;
+                if !ready {
+                    let _ = spawn_detached_daemon(&home);
+                    ready =
+                        wait_for_daemon(&config.control_url(), std::time::Duration::from_secs(4))
+                            .await;
+                }
+                ready
+            } else {
+                false
+            };
             println!(
                 "{}",
                 serde_json::to_string_pretty(&json!({
@@ -323,10 +337,11 @@ pub async fn main_entry() -> Result<()> {
                     "with_hermes": with_hermes,
                     "hermes_home": hermes_home,
                     "launch_agent": launch_agent_path,
+                    "daemon_ready": daemon_ready,
                     "next": if launch_agent {
                         vec![
                             "wildmesh profile".to_string(),
-                            "wildmesh browse".to_string(),
+                            "wildmesh dashboard".to_string(),
                             "wildmesh roam".to_string(),
                         ]
                     } else {
@@ -399,7 +414,7 @@ pub async fn main_entry() -> Result<()> {
         Commands::Status { home } => {
             println!(
                 "{}",
-                serde_json::to_string_pretty(&get_json(home, "/v1/status")?)?
+                serde_json::to_string_pretty(&get_json(home, "/v1/status").await?)?
             );
         }
         Commands::Profile { home, json } => {
@@ -419,7 +434,7 @@ pub async fn main_entry() -> Result<()> {
                 "external_addrs": [],
                 "upnp_mapped_addrs": [],
             });
-            if let Ok(status) = get_json(Some(home.clone()), "/v1/status") {
+            if let Ok(status) = get_json(Some(home.clone()), "/v1/status").await {
                 if let Some(reachability) = status.get("reachability").cloned() {
                     if let Some(map) = profile.as_object_mut() {
                         map.insert("nat_status".to_string(), reachability.get("nat_status").cloned().unwrap_or(Value::String("unknown".to_string())));
@@ -489,13 +504,13 @@ pub async fn main_entry() -> Result<()> {
             });
             println!(
                 "{}",
-                serde_json::to_string_pretty(&post_json(home, "/v1/peers", &payload)?)?
+                serde_json::to_string_pretty(&post_json(home, "/v1/peers", &payload).await?)?
             );
         }
         Commands::Peers { home } => {
             println!(
                 "{}",
-                serde_json::to_string_pretty(&get_json(home, "/v1/peers")?)?
+                serde_json::to_string_pretty(&get_json(home, "/v1/peers").await?)?
             );
         }
         Commands::Browse {
@@ -506,12 +521,14 @@ pub async fn main_entry() -> Result<()> {
             discovered_only,
             json,
             watch,
-        } => run_browse(home, interest, text, refresh, discovered_only, json, watch)?,
-        Commands::Dashboard { home } => crate::dashboard::run(home)?,
+        } => run_browse(home, interest, text, refresh, discovered_only, json, watch).await?,
+        Commands::Dashboard { home } => {
+            tokio::task::spawn_blocking(move || crate::dashboard::run(home)).await??
+        }
         Commands::Roam {
             home,
             discovered_only,
-        } => run_roam(home, discovered_only)?,
+        } => run_roam(home, discovered_only).await?,
         Commands::Grant {
             peer_id,
             capability,
@@ -531,20 +548,23 @@ pub async fn main_entry() -> Result<()> {
                     home,
                     "/v1/capabilities/grants",
                     &payload
-                )?)?
+                )
+                .await?)?
             );
         }
         Commands::Subscribe { topic, home } => {
             let payload = json!({ "topic": topic });
             println!(
                 "{}",
-                serde_json::to_string_pretty(&post_json(home, "/v1/subscriptions", &payload)?)?
+                serde_json::to_string_pretty(
+                    &post_json(home, "/v1/subscriptions", &payload).await?
+                )?
             );
         }
         Commands::Subscriptions { home } => {
             println!(
                 "{}",
-                serde_json::to_string_pretty(&get_json(home, "/v1/subscriptions")?)?
+                serde_json::to_string_pretty(&get_json(home, "/v1/subscriptions").await?)?
             );
         }
         Commands::Send {
@@ -563,7 +583,9 @@ pub async fn main_entry() -> Result<()> {
             });
             println!(
                 "{}",
-                serde_json::to_string_pretty(&post_json(home, "/v1/messages/send", &payload)?)?
+                serde_json::to_string_pretty(
+                    &post_json(home, "/v1/messages/send", &payload).await?
+                )?
             );
         }
         Commands::Broadcast { topic, body, home } => {
@@ -577,18 +599,25 @@ pub async fn main_entry() -> Result<()> {
                     home,
                     "/v1/messages/broadcast",
                     &payload
-                )?)?
+                )
+                .await?)?
             );
         }
         Commands::Inbox { limit, home } => {
             let url = format!("/v1/messages/inbox?limit={}", limit.clamp(1, 200));
-            println!("{}", serde_json::to_string_pretty(&get_json(home, &url)?)?);
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&get_json(home, &url).await?)?
+            );
         }
         Commands::Outbox { limit, home } => {
             let url = format!("/v1/messages/outbox?limit={}", limit.clamp(1, 200));
-            println!("{}", serde_json::to_string_pretty(&get_json(home, &url)?)?);
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&get_json(home, &url).await?)?
+            );
         }
-        Commands::Sidecar { home } => run_sidecar(home)?,
+        Commands::Sidecar { home } => run_sidecar(home).await?,
         Commands::InstallHermesPlugin {
             asset_root,
             hermes_home,
@@ -610,7 +639,8 @@ pub async fn main_entry() -> Result<()> {
                         "host": target_host,
                         "port": target_port,
                     }),
-                )?)?
+                )
+                .await?)?
             );
         }
     }
@@ -621,7 +651,7 @@ pub async fn main_sidecar_entry() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
         .init();
-    run_sidecar(None)
+    run_sidecar(None).await
 }
 
 fn map_kind(kind: &str) -> Result<&'static str> {
@@ -642,23 +672,74 @@ fn base_url(home: Option<PathBuf>) -> Result<String> {
     Ok(cfg.control_url())
 }
 
-fn get_json(home: Option<PathBuf>, path: &str) -> Result<Value> {
+async fn get_json(home: Option<PathBuf>, path: &str) -> Result<Value> {
     let client = Client::builder().build()?;
     Ok(client
         .get(format!("{}{}", base_url(home)?, path))
-        .send()?
+        .send()
+        .await?
         .error_for_status()?
-        .json()?)
+        .json()
+        .await?)
 }
 
-fn post_json(home: Option<PathBuf>, path: &str, payload: &Value) -> Result<Value> {
+async fn wait_for_daemon(control_url: &str, timeout: std::time::Duration) -> bool {
+    let deadline = std::time::Instant::now() + timeout;
+    let client = match Client::builder().timeout(std::time::Duration::from_secs(1)).build() {
+        Ok(client) => client,
+        Err(_) => return false,
+    };
+    while std::time::Instant::now() < deadline {
+        if client
+            .get(format!("{control_url}/v1/status"))
+            .send()
+            .await
+            .and_then(|response| response.error_for_status())
+            .is_ok()
+        {
+            return true;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    }
+    false
+}
+
+fn spawn_detached_daemon(home: &Path) -> Result<()> {
+    let binary = env::current_exe()
+        .context("resolve current executable")?
+        .canonicalize()
+        .context("canonicalize current executable")?;
+    let log_path = home.join("wildmesh.log");
+    let stdout = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .context("open daemon stdout log")?;
+    let stderr = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .context("open daemon stderr log")?;
+    Command::new(binary)
+        .args(["run", "--home", home.to_string_lossy().as_ref()])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::from(stdout))
+        .stderr(std::process::Stdio::from(stderr))
+        .spawn()
+        .context("spawn detached daemon fallback")?;
+    Ok(())
+}
+
+async fn post_json(home: Option<PathBuf>, path: &str, payload: &Value) -> Result<Value> {
     let client = Client::builder().build()?;
     Ok(client
         .post(format!("{}{}", base_url(home)?, path))
         .json(payload)
-        .send()?
+        .send()
+        .await?
         .error_for_status()?
-        .json()?)
+        .json()
+        .await?)
 }
 
 fn render_profile(profile: &Value) -> String {
@@ -710,7 +791,7 @@ fn render_profile(profile: &Value) -> String {
     )
 }
 
-fn run_browse(
+async fn run_browse(
     home: Option<PathBuf>,
     interest: Option<String>,
     text: Option<String>,
@@ -722,10 +803,10 @@ fn run_browse(
     let mut first_pass = true;
     loop {
         if refresh || first_pass {
-            let _ = post_json(home.clone(), "/v1/discovery/announce", &json!({}));
+            let _ = post_json(home.clone(), "/v1/discovery/announce", &json!({})).await;
         }
         first_pass = false;
-        let peers = get_json(home.clone(), "/v1/peers")?;
+        let peers = get_json(home.clone(), "/v1/peers").await?;
         let mut peers = peers.as_array().cloned().unwrap_or_default();
         peers.retain(|peer| matches_peer(peer, interest.as_deref(), text.as_deref(), discovered_only));
         if json_output {
@@ -735,7 +816,7 @@ fn run_browse(
             println!("{}", render_peer_table(&peers));
         }
         if let Some(interval) = watch {
-            std::thread::sleep(std::time::Duration::from_secs(interval.max(1)));
+            tokio::time::sleep(std::time::Duration::from_secs(interval.max(1))).await;
             continue;
         }
         break;
@@ -743,7 +824,7 @@ fn run_browse(
     Ok(())
 }
 
-fn run_roam(home: Option<PathBuf>, discovered_only: bool) -> Result<()> {
+async fn run_roam(home: Option<PathBuf>, discovered_only: bool) -> Result<()> {
     let mut interest: Option<String> = None;
     let mut text: Option<String> = None;
     let mut refresh = true;
@@ -756,7 +837,8 @@ fn run_roam(home: Option<PathBuf>, discovered_only: bool) -> Result<()> {
             discovered_only,
             false,
             None,
-        )?;
+        )
+        .await?;
         refresh = false;
         println!();
         println!("commands: refresh | interest <term> | text <term> | clear | inspect <peer-prefix> | help | quit");
@@ -798,7 +880,7 @@ fn run_roam(home: Option<PathBuf>, discovered_only: bool) -> Result<()> {
             continue;
         }
         if let Some(prefix) = line.strip_prefix("inspect ") {
-            let peers = get_json(home.clone(), "/v1/peers")?;
+            let peers = get_json(home.clone(), "/v1/peers").await?;
             let Some(peer) = peers
                 .as_array()
                 .and_then(|items| {
@@ -921,7 +1003,7 @@ fn truncate(value: &str, width: usize) -> String {
     truncated
 }
 
-fn run_sidecar(home: Option<PathBuf>) -> Result<()> {
+async fn run_sidecar(home: Option<PathBuf>) -> Result<()> {
     let client = Client::builder().build()?;
     let config_home = home.unwrap_or_else(AgentMeshConfig::home_dir);
     let base = base_url(Some(config_home.clone()))?;
@@ -947,9 +1029,11 @@ fn run_sidecar(home: Option<PathBuf>) -> Result<()> {
         let response = match value.get("op").and_then(Value::as_str) {
             Some("status") => client
                 .get(format!("{base}/v1/status"))
-                .send()?
+                .send()
+                .await?
                 .error_for_status()?
-                .json::<Value>()?,
+                .json::<Value>()
+                .await?,
             Some("profile") => {
                 let cfg = AgentMeshConfig::load_or_create(&config_home)?;
                 let mut profile = json!({
@@ -968,9 +1052,11 @@ fn run_sidecar(home: Option<PathBuf>) -> Result<()> {
                 });
                 if let Ok(status) = client
                     .get(format!("{base}/v1/status"))
-                    .send()?
+                    .send()
+                    .await?
                     .error_for_status()?
                     .json::<Value>()
+                    .await
                 {
                     if let Some(reachability) = status.get("reachability").cloned() {
                         if let Some(map) = profile.as_object_mut() {
@@ -985,19 +1071,22 @@ fn run_sidecar(home: Option<PathBuf>) -> Result<()> {
                 profile
             }
             Some("list_peers") => {
-                json!({"items": client.get(format!("{base}/v1/peers")).send()?.error_for_status()?.json::<Value>()?})
+                json!({"items": client.get(format!("{base}/v1/peers")).send().await?.error_for_status()?.json::<Value>().await?})
             }
             Some("browse") => {
                 client
                     .post(format!("{base}/v1/discovery/announce"))
                     .json(&json!({}))
-                    .send()?
+                    .send()
+                    .await?
                     .error_for_status()?;
                 let mut items = client
                     .get(format!("{base}/v1/peers"))
-                    .send()?
+                    .send()
+                    .await?
                     .error_for_status()?
-                    .json::<Vec<Value>>()?;
+                    .json::<Vec<Value>>()
+                    .await?;
                 if let Some(interest) = value.get("interest").and_then(Value::as_str) {
                     let interest = interest.to_lowercase();
                     items.retain(|peer| {
@@ -1036,48 +1125,60 @@ fn run_sidecar(home: Option<PathBuf>) -> Result<()> {
             Some("add_peer") => client
                 .post(format!("{base}/v1/peers"))
                 .json(&value["payload"])
-                .send()?
+                .send()
+                .await?
                 .error_for_status()?
-                .json::<Value>()?,
+                .json::<Value>()
+                .await?,
             Some("grant") => client
                 .post(format!("{base}/v1/capabilities/grants"))
                 .json(&value["payload"])
-                .send()?
+                .send()
+                .await?
                 .error_for_status()?
-                .json::<Value>()?,
+                .json::<Value>()
+                .await?,
             Some("subscribe") => client
                 .post(format!("{base}/v1/subscriptions"))
                 .json(&value["payload"])
-                .send()?
+                .send()
+                .await?
                 .error_for_status()?
-                .json::<Value>()?,
+                .json::<Value>()
+                .await?,
             Some("list_subscriptions") => {
-                json!({"items": client.get(format!("{base}/v1/subscriptions")).send()?.error_for_status()?.json::<Value>()?})
+                json!({"items": client.get(format!("{base}/v1/subscriptions")).send().await?.error_for_status()?.json::<Value>().await?})
             }
             Some("send") => client
                 .post(format!("{base}/v1/messages/send"))
                 .json(&value["payload"])
-                .send()?
+                .send()
+                .await?
                 .error_for_status()?
-                .json::<Value>()?,
+                .json::<Value>()
+                .await?,
             Some("broadcast") => client
                 .post(format!("{base}/v1/messages/broadcast"))
                 .json(&value["payload"])
-                .send()?
+                .send()
+                .await?
                 .error_for_status()?
-                .json::<Value>()?,
+                .json::<Value>()
+                .await?,
             Some("inbox") => {
-                json!({"items": client.get(format!("{base}/v1/messages/inbox?limit={}", value.get("limit").and_then(Value::as_i64).unwrap_or(50))).send()?.error_for_status()?.json::<Value>()?})
+                json!({"items": client.get(format!("{base}/v1/messages/inbox?limit={}", value.get("limit").and_then(Value::as_i64).unwrap_or(50))).send().await?.error_for_status()?.json::<Value>().await?})
             }
             Some("outbox") => {
-                json!({"items": client.get(format!("{base}/v1/messages/outbox?limit={}", value.get("limit").and_then(Value::as_i64).unwrap_or(50))).send()?.error_for_status()?.json::<Value>()?})
+                json!({"items": client.get(format!("{base}/v1/messages/outbox?limit={}", value.get("limit").and_then(Value::as_i64).unwrap_or(50))).send().await?.error_for_status()?.json::<Value>().await?})
             }
             Some("discover_now") => client
                 .post(format!("{base}/v1/discovery/announce"))
                 .json(&value["payload"])
-                .send()?
+                .send()
+                .await?
                 .error_for_status()?
-                .json::<Value>()?,
+                .json::<Value>()
+                .await?,
             Some(other) => json!({"error": format!("unknown op: {other}")}),
             None => json!({"error": "missing op"}),
         };
