@@ -821,6 +821,8 @@ async fn local_profile_record(state: &RuntimeState) -> Result<MeshProfileRecord>
         discovered: false,
         last_seen_at: Some(Utc::now()),
         created_at: Utc::now(),
+        activity_state: None,
+        last_seen_age_secs: None,
     };
     Ok(MeshProfileRecord {
         transport_peer_id: state.identity.transport_peer_id.to_string(),
@@ -1040,6 +1042,8 @@ mod tests {
             discovered: false,
             last_seen_at: None,
             created_at: Utc::now(),
+            activity_state: None,
+            last_seen_age_secs: None,
         };
         let profile = MeshProfileRecord {
             transport_peer_id: "transport-1".to_string(),

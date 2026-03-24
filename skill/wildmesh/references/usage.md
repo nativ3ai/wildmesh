@@ -88,6 +88,14 @@ That is useful for local and LAN interoperability tests. Once both daemons are
 up, the peers should appear in `browse`, `roam`, and the dashboard after a short
 discovery interval.
 
+Peer visibility is activity-based:
+
+- `active`: recently observed on the mesh
+- `quiet`: not seen recently, but still inside the visibility window
+
+Peers older than the visibility window disappear from normal views
+automatically.
+
 Dashboard controls:
 
 - `1-5` switch tabs

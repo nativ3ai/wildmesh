@@ -80,6 +80,8 @@ async fn add_peer(
         discovered: false,
         last_seen_at: None,
         created_at: chrono::Utc::now(),
+        activity_state: None,
+        last_seen_age_secs: None,
     };
     service
         .add_peer(peer)

@@ -37,6 +37,8 @@ async fn peer_storage_roundtrip_preserves_profile_metadata() {
         discovered: true,
         last_seen_at: Some(Utc::now()),
         created_at: Utc::now(),
+        activity_state: None,
+        last_seen_age_secs: None,
     };
     storage::upsert_peer(&pool, &peer).await.expect("upsert peer");
     let loaded = storage::get_peer(&pool, "peer-1")

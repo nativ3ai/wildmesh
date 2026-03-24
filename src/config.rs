@@ -61,6 +61,14 @@ impl Default for AgentMeshConfig {
 }
 
 impl AgentMeshConfig {
+    pub fn peer_active_window_secs(&self) -> u64 {
+        (self.announce_interval_secs.max(30) * 2 + 15).max(75)
+    }
+
+    pub fn peer_visible_window_secs(&self) -> u64 {
+        (self.announce_interval_secs.max(30) * 8).max(300)
+    }
+
     pub fn default_bootstrap_urls() -> Vec<String> {
         for key in ["WILDMESH_BOOTSTRAP_URLS", "AGENTMESH_BOOTSTRAP_URLS"] {
             if let Ok(raw) = env::var(key) {

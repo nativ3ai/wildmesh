@@ -966,12 +966,12 @@ fn render_peer_table(peers: &[Value]) -> String {
     }
     let mut lines = vec![
         format!(
-            "{:<14}  {:<18}  {:<22}  {:<20}  {:<9}  {}",
-            "peer", "agent", "interests", "endpoint", "relay", "description"
+            "{:<14}  {:<18}  {:<10}  {:<22}  {:<20}  {:<9}  {}",
+            "peer", "agent", "state", "interests", "endpoint", "relay", "description"
         ),
         format!(
-            "{:-<14}  {:-<18}  {:-<22}  {:-<20}  {:-<9}  {:-<1}",
-            "", "", "", "", "", ""
+            "{:-<14}  {:-<18}  {:-<10}  {:-<22}  {:-<20}  {:-<9}  {:-<1}",
+            "", "", "", "", "", "", ""
         ),
     ];
     for peer in peers {
@@ -993,6 +993,10 @@ fn render_peer_table(peers: &[Value]) -> String {
             peer.get("host").and_then(Value::as_str).unwrap_or("?"),
             peer.get("port").and_then(Value::as_u64).unwrap_or(0)
         );
+        let state = peer
+            .get("activity_state")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
         let relay = if peer.get("relay_url").and_then(Value::as_str).is_some() {
             "hub"
         } else {
@@ -1003,9 +1007,10 @@ fn render_peer_table(peers: &[Value]) -> String {
             .and_then(Value::as_str)
             .unwrap_or("-");
         lines.push(format!(
-            "{:<14}  {:<18}  {:<22}  {:<20}  {:<9}  {}",
+            "{:<14}  {:<18}  {:<10}  {:<22}  {:<20}  {:<9}  {}",
             short_peer,
             truncate(agent, 18),
+            truncate(state, 10),
             truncate(&interests, 22),
             truncate(&endpoint, 20),
             relay,

@@ -80,12 +80,13 @@ impl MeshService {
     }
 
     pub async fn status(&self) -> Result<StatusResponse> {
-        let (peer_count, grant_count, subscription_count, inbox_count, outbox_count) =
+        let visible_peer_count = self.list_peers().await?.len() as i64;
+        let (_, grant_count, subscription_count, inbox_count, outbox_count) =
             storage::counts(&self.pool).await?;
         Ok(StatusResponse {
             identity: self.identity_view(),
             reachability: self.swarm.reachability(),
-            peer_count,
+            peer_count: visible_peer_count,
             grant_count,
             subscription_count,
             inbox_count,
@@ -95,11 +96,19 @@ impl MeshService {
 
     pub async fn add_peer(&self, peer: PeerRecord) -> Result<PeerRecord> {
         storage::upsert_peer(&self.pool, &peer).await?;
-        Ok(peer)
+        Ok(present_peer(&self.config, peer.clone(), Utc::now()).unwrap_or_else(|| {
+            let mut peer = peer;
+            peer.activity_state = Some("manual".to_string());
+            peer
+        }))
     }
 
     pub async fn list_peers(&self) -> Result<Vec<PeerRecord>> {
-        storage::list_peers(&self.pool).await
+        Ok(storage::list_peers(&self.pool)
+            .await?
+            .into_iter()
+            .filter_map(|peer| present_peer(&self.config, peer, Utc::now()))
+            .collect())
     }
 
     pub async fn grant(&self, grant: CapabilityGrant) -> Result<CapabilityGrant> {
@@ -189,5 +198,97 @@ impl MeshService {
             bail!("targeted discovery is not supported in libp2p mode");
         }
         self.swarm.discover().await
+    }
+}
+
+fn present_peer(
+    config: &AgentMeshConfig,
+    mut peer: PeerRecord,
+    now: chrono::DateTime<Utc>,
+) -> Option<PeerRecord> {
+    match peer.last_seen_at {
+        Some(last_seen_at) => {
+            let age = (now - last_seen_at).num_seconds().max(0);
+            peer.last_seen_age_secs = Some(age);
+            if age as u64 <= config.peer_active_window_secs() {
+                peer.activity_state = Some("active".to_string());
+                Some(peer)
+            } else if age as u64 <= config.peer_visible_window_secs() {
+                peer.activity_state = Some("quiet".to_string());
+                Some(peer)
+            } else {
+                None
+            }
+        }
+        None => {
+            peer.activity_state = Some("manual".to_string());
+            Some(peer)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::present_peer;
+    use crate::config::AgentMeshConfig;
+    use crate::models::PeerRecord;
+    use chrono::{Duration, Utc};
+
+    fn sample_peer(last_seen_at: Option<chrono::DateTime<Utc>>) -> PeerRecord {
+        PeerRecord {
+            peer_id: "peer-1".to_string(),
+            label: None,
+            agent_label: Some("peer".to_string()),
+            agent_description: Some("peer".to_string()),
+            interests: vec!["mesh".to_string()],
+            host: "192.168.1.10".to_string(),
+            port: 4500,
+            public_key: "pub".to_string(),
+            encryption_public_key: "enc".to_string(),
+            relay_url: None,
+            notes: None,
+            discovered: true,
+            last_seen_at,
+            created_at: Utc::now(),
+            activity_state: None,
+            last_seen_age_secs: None,
+        }
+    }
+
+    #[test]
+    fn present_peer_marks_recent_peers_active() {
+        let config = AgentMeshConfig::default();
+        let now = Utc::now();
+        let peer = sample_peer(Some(now - Duration::seconds(20)));
+        let peer = present_peer(&config, peer, now).expect("peer visible");
+        assert_eq!(peer.activity_state.as_deref(), Some("active"));
+        assert_eq!(peer.last_seen_age_secs, Some(20));
+    }
+
+    #[test]
+    fn present_peer_marks_mid_age_peers_quiet() {
+        let config = AgentMeshConfig::default();
+        let now = Utc::now();
+        let peer = sample_peer(Some(now - Duration::seconds(150)));
+        let peer = present_peer(&config, peer, now).expect("peer visible");
+        assert_eq!(peer.activity_state.as_deref(), Some("quiet"));
+    }
+
+    #[test]
+    fn present_peer_hides_expired_peers() {
+        let config = AgentMeshConfig::default();
+        let now = Utc::now();
+        let peer = sample_peer(Some(now - Duration::seconds(600)));
+        assert!(present_peer(&config, peer, now).is_none());
+    }
+
+    #[test]
+    fn present_peer_keeps_manual_peers_visible() {
+        let config = AgentMeshConfig::default();
+        let now = Utc::now();
+        let peer = sample_peer(None);
+        let peer = present_peer(&config, peer, now).expect("peer visible");
+        assert_eq!(peer.activity_state.as_deref(), Some("manual"));
+        assert_eq!(peer.last_seen_age_secs, None);
     }
 }

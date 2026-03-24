@@ -46,6 +46,10 @@ pub struct PeerRecord {
     pub discovered: bool,
     pub last_seen_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
+    #[serde(default)]
+    pub activity_state: Option<String>,
+    #[serde(default)]
+    pub last_seen_age_secs: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -1123,8 +1123,9 @@ fn render_peers(frame: &mut Frame, area: Rect, app: &DashboardApp) {
                     .or_else(|| peer.label.clone())
                     .unwrap_or_else(|| short_peer(&peer.peer_id));
                 let detail = format!(
-                    "{}  [{}]  {}",
+                    "{}  [{}]  {}  {}",
                     short_peer(&peer.peer_id),
+                    peer.activity_state.as_deref().unwrap_or("unknown"),
                     peer.interests.join(", "),
                     peer.host
                 );
@@ -1201,12 +1202,16 @@ fn render_peers(frame: &mut Frame, area: Rect, app: &DashboardApp) {
                 Span::raw(if peer.relay_url.is_some() { "relay-assisted" } else { "direct-advertised" }),
             ]),
             Line::from(vec![
+                Span::styled("state ", neon(Color::LightGreen)),
+                Span::raw(peer.activity_state.clone().unwrap_or_else(|| "unknown".to_string())),
+            ]),
+            Line::from(vec![
                 Span::styled("seen  ", neon(Color::LightGreen)),
-                Span::raw(
-                    peer.last_seen_at
-                        .map(format_timestamp)
-                        .unwrap_or_else(|| "never".to_string()),
-                ),
+                Span::raw(match (peer.last_seen_age_secs, peer.last_seen_at) {
+                    (Some(age), Some(timestamp)) => format!("{}s ago  ({})", age, format_timestamp(timestamp)),
+                    (_, Some(timestamp)) => format_timestamp(timestamp),
+                    _ => "never".to_string(),
+                }),
             ]),
             Line::from(vec![
                 Span::styled("grant ", neon(Color::LightGreen)),

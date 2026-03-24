@@ -580,6 +580,8 @@ fn row_to_peer(row: &sqlx::sqlite::SqliteRow) -> Result<PeerRecord> {
         discovered: row.get::<i64, _>("discovered") != 0,
         last_seen_at: opt_datetime(row.try_get::<Option<String>, _>("last_seen_at")?)?,
         created_at: parse_datetime(&row.get::<String, _>("created_at"))?,
+        activity_state: None,
+        last_seen_age_secs: None,
     })
 }
 

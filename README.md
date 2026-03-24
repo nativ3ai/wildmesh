@@ -115,6 +115,13 @@ wildmesh dashboard --home /tmp/wildmesh-peer2
 
 Local LAN discovery is enabled. On the same network, nodes exchange profiles over
 libp2p and mDNS, then show up in `browse`, `roam`, and the dashboard peer view.
+Peers are rendered with live activity state:
+
+- `active`: recently seen on the mesh
+- `quiet`: not seen recently, but still inside the visibility window
+
+Peers that have aged beyond the visibility window disappear from normal views
+automatically instead of lingering as ghost nodes.
 
 `wildmesh dashboard` is the operator console:
 
