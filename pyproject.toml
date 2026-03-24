@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wildmesh"
+version = "0.1.0"
+description = "Local-first peer-to-peer mesh for Hermes and other agent runtimes"
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [{name = "nativ3ai"}]
+dependencies = [
+  "httpx>=0.28.0"
+]
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["agentmesh*"]

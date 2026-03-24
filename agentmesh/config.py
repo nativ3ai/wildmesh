@@ -1,0 +1,109 @@
+from __future__ import annotations
+
+import json
+import os
+from dataclasses import dataclass
+from pathlib import Path
+
+DEFAULT_BOOTSTRAP_PEERS = [
+    "/dnsaddr/bootstrap.libp2p.io/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN",
+    "/dnsaddr/bootstrap.libp2p.io/p2p/QmQCU2EcMqAqQPR2i9bChDtGNJchTbq5TbXJJ16u19uLTa",
+    "/dnsaddr/bootstrap.libp2p.io/p2p/QmbLHAnMoJPWSCR5Zhtx6BHJX9KiKNN6tpvbUcqanj75Nb",
+    "/dnsaddr/bootstrap.libp2p.io/p2p/QmcZf59bWwK5XFi76CZX8cbJ4BhTzzA3gU1ZjYZcYW3dwt",
+    "/ip4/104.131.131.82/tcp/4001/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ",
+]
+
+
+@dataclass(slots=True)
+class AgentMeshConfig:
+    home: Path
+    control_host: str = "127.0.0.1"
+    control_port: int = 8877
+    p2p_host: str = "0.0.0.0"
+    p2p_port: int = 4500
+    advertise_host: str = "127.0.0.1"
+    agent_label: str | None = None
+    agent_description: str | None = None
+    interests: list[str] | None = None
+    discovery_host: str = "0.0.0.0"
+    discovery_port: int = 45150
+    discovery_broadcast_addr: str = "255.255.255.255"
+    public_api_host: str = "0.0.0.0"
+    public_api_port: int = 45200
+    bootstrap_urls: list[str] | None = None
+    relay_poll_interval_secs: int = 5
+    announce_interval_secs: int = 30
+    direct_connect_timeout_secs: int = 2
+    peer_exchange_interval_secs: int = 45
+
+    @property
+    def db_path(self) -> Path:
+        return self.home / "state.db"
+
+    @property
+    def config_path(self) -> Path:
+        return self.home / "config.json"
+
+    @property
+    def control_url(self) -> str:
+        return f"http://{self.control_host}:{self.control_port}"
+
+    @property
+    def p2p_endpoint(self) -> str:
+        return f"{self.advertise_host}:{self.p2p_port}"
+
+    def persist(self) -> None:
+        self.home.mkdir(parents=True, exist_ok=True)
+        self.config_path.write_text(
+            json.dumps(
+                {
+                    "control_host": self.control_host,
+                    "control_port": self.control_port,
+                    "p2p_host": self.p2p_host,
+                    "p2p_port": self.p2p_port,
+                    "advertise_host": self.advertise_host,
+                    "agent_label": self.agent_label,
+                    "agent_description": self.agent_description,
+                    "interests": self.interests or [],
+                    "discovery_host": self.discovery_host,
+                    "discovery_port": self.discovery_port,
+                    "discovery_broadcast_addr": self.discovery_broadcast_addr,
+                    "public_api_host": self.public_api_host,
+                    "public_api_port": self.public_api_port,
+                    "bootstrap_urls": self.bootstrap_urls or DEFAULT_BOOTSTRAP_PEERS,
+                    "relay_poll_interval_secs": self.relay_poll_interval_secs,
+                    "announce_interval_secs": self.announce_interval_secs,
+                    "direct_connect_timeout_secs": self.direct_connect_timeout_secs,
+                    "peer_exchange_interval_secs": self.peer_exchange_interval_secs,
+                },
+                indent=2,
+            )
+        )
+
+
+def default_home() -> Path:
+    return Path(
+        os.environ.get(
+            "WILDMESH_HOME",
+            os.environ.get("AGENTMESH_HOME", Path.home() / ".wildmesh"),
+        )
+    )
+
+
+def load_config(home: Path | None = None) -> AgentMeshConfig:
+    root = home or default_home()
+    path = root / "config.json"
+    if not path.exists():
+        cfg = AgentMeshConfig(home=root, bootstrap_urls=DEFAULT_BOOTSTRAP_PEERS.copy(), interests=[])
+        cfg.persist()
+        return cfg
+    raw = json.loads(path.read_text())
+    if not raw.get("bootstrap_urls"):
+        env_value = os.environ.get("WILDMESH_BOOTSTRAP_URLS") or os.environ.get("AGENTMESH_BOOTSTRAP_URLS")
+        if env_value:
+            raw["bootstrap_urls"] = [item.strip() for item in env_value.split(",") if item.strip()]
+    raw.setdefault("bootstrap_urls", DEFAULT_BOOTSTRAP_PEERS.copy())
+    if not raw.get("bootstrap_urls"):
+        raw["bootstrap_urls"] = DEFAULT_BOOTSTRAP_PEERS.copy()
+    raw.setdefault("interests", [])
+    return AgentMeshConfig(home=root, **raw)
