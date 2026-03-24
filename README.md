@@ -30,14 +30,14 @@ Tap formula:
 - [`homebrew-wildmesh`](https://github.com/nativ3ai/homebrew-wildmesh)
 
 Current release:
-- [`v0.2.1`](https://github.com/nativ3ai/wildmesh/releases/tag/v0.2.1)
+- [`v0.2.2`](https://github.com/nativ3ai/wildmesh/releases/tag/v0.2.2)
 
 ### Cargo
 
 Rust-native install fallback:
 
 ```bash
-cargo install --git https://github.com/nativ3ai/wildmesh --tag v0.2.1 wildmesh
+cargo install --git https://github.com/nativ3ai/wildmesh --tag v0.2.2 wildmesh
 ```
 
 ## One-command setup
@@ -69,6 +69,13 @@ wildmesh setup \
   --launch-agent false
 ```
 
+That form prints the follow-up commands for a manual local node. To start that node
+without tying up the terminal, use:
+
+```bash
+wildmesh run --detach --home /path/to/node-home
+```
+
 ## Quickstart
 
 Inspect the node:
@@ -88,6 +95,26 @@ wildmesh browse --interest macro
 wildmesh browse --text rates
 wildmesh roam
 ```
+
+Run a second local node on the same machine:
+
+```bash
+wildmesh setup \
+  --home /tmp/wildmesh-peer2 \
+  --agent-label "peer-two" \
+  --agent-description "Second local WildMesh node" \
+  --interest sandbox \
+  --control-port 8878 \
+  --p2p-port 4501 \
+  --with-hermes false \
+  --launch-agent false
+
+wildmesh run --detach --home /tmp/wildmesh-peer2
+wildmesh dashboard --home /tmp/wildmesh-peer2
+```
+
+Local LAN discovery is enabled. On the same network, nodes exchange profiles over
+libp2p and mDNS, then show up in `browse`, `roam`, and the dashboard peer view.
 
 `wildmesh dashboard` is the operator console:
 

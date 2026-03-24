@@ -87,6 +87,8 @@ pub enum Commands {
     Run {
         #[arg(long)]
         home: Option<PathBuf>,
+        #[arg(long, default_value_t = false, action = ArgAction::SetTrue)]
+        detach: bool,
     },
     Status {
         #[arg(long)]
@@ -346,8 +348,9 @@ pub async fn main_entry() -> Result<()> {
                         ]
                     } else {
                         vec![
-                            format!("wildmesh run --home {}", home.display()),
+                            format!("wildmesh run --detach --home {}", home.display()),
                             format!("wildmesh profile --home {}", home.display()),
+                            format!("wildmesh dashboard --home {}", home.display()),
                         ]
                     }
                 }))?
@@ -405,11 +408,28 @@ pub async fn main_entry() -> Result<()> {
                 serde_json::to_string_pretty(&service.status().await?)?
             );
         }
-        Commands::Run { home } => {
+        Commands::Run { home, detach } => {
             let home = home.unwrap_or_else(AgentMeshConfig::home_dir);
-            let config = AgentMeshConfig::load_or_create(&home)?;
-            let service = MeshService::bootstrap(&home, config).await?;
-            api::serve(service).await?;
+            if detach {
+                let config = AgentMeshConfig::load_or_create(&home)?;
+                spawn_detached_daemon(&home)?;
+                let ready =
+                    wait_for_daemon(&config.control_url(), std::time::Duration::from_secs(6))
+                        .await;
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&json!({
+                        "status": if ready { "running" } else { "starting" },
+                        "home": home,
+                        "control_url": config.control_url(),
+                        "daemon_ready": ready,
+                    }))?
+                );
+            } else {
+                let config = AgentMeshConfig::load_or_create(&home)?;
+                let service = MeshService::bootstrap(&home, config).await?;
+                api::serve(service).await?;
+            }
         }
         Commands::Status { home } => {
             println!(
@@ -804,6 +824,7 @@ async fn run_browse(
     loop {
         if refresh || first_pass {
             let _ = post_json(home.clone(), "/v1/discovery/announce", &json!({})).await;
+            tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
         }
         first_pass = false;
         let peers = get_json(home.clone(), "/v1/peers").await?;

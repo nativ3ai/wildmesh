@@ -16,6 +16,7 @@ use libp2p::gossipsub::{
 use libp2p::identify;
 use libp2p::kad::{self, store::MemoryStore};
 use libp2p::mdns;
+use libp2p::multiaddr::Protocol;
 use libp2p::request_response::{self, OutboundRequestId, ProtocolSupport};
 use libp2p::swarm::{NetworkBehaviour, SwarmEvent};
 use libp2p::{Multiaddr, PeerId, StreamProtocol, SwarmBuilder, identity, ping};
@@ -540,6 +541,7 @@ async fn handle_command(
             );
         }
         SwarmCommand::Discover { respond_to } => {
+            let _ = announce_profile(swarm, state).await;
             trigger_discovery_queries(swarm, state);
             let _ = respond_to.send(Ok(()));
         }
@@ -765,14 +767,15 @@ async fn upsert_profile(
     transport_peer: &PeerId,
     profile: MeshProfileRecord,
 ) -> Result<()> {
+    let peer = discovered_peer_from_profile(&profile);
     state
         .known_transport_by_app
-        .insert(profile.peer.peer_id.clone(), *transport_peer);
+        .insert(peer.peer_id.clone(), *transport_peer);
     state.known_profiles.insert(*transport_peer, profile.clone());
-    storage::upsert_peer(&state.pool, &profile.peer).await?;
+    storage::upsert_peer(&state.pool, &peer).await?;
     storage::replace_peer_topics(
         &state.pool,
-        &profile.peer.peer_id,
+        &peer.peer_id,
         &profile.subscriptions,
         Utc::now(),
     )
@@ -784,10 +787,11 @@ async fn upsert_profile_without_transport(
     state: &mut RuntimeState,
     profile: MeshProfileRecord,
 ) -> Result<()> {
-    storage::upsert_peer(&state.pool, &profile.peer).await?;
+    let peer = discovered_peer_from_profile(&profile);
+    storage::upsert_peer(&state.pool, &peer).await?;
     storage::replace_peer_topics(
         &state.pool,
-        &profile.peer.peer_id,
+        &peer.peer_id,
         &profile.subscriptions,
         Utc::now(),
     )
@@ -882,6 +886,61 @@ fn advertised_multiaddrs(config: &AgentMeshConfig) -> Vec<String> {
     addrs
 }
 
+fn discovered_peer_from_profile(profile: &MeshProfileRecord) -> PeerRecord {
+    let mut peer = profile.peer.clone();
+    if let Some((host, port)) = pick_best_addr(&profile.listen_addrs) {
+        peer.host = host;
+        peer.port = port;
+    }
+    peer.discovered = true;
+    peer.last_seen_at = Some(Utc::now());
+    peer
+}
+
+fn pick_best_addr(addrs: &[String]) -> Option<(String, u16)> {
+    let mut fallback: Option<(String, u16)> = None;
+    for raw in addrs {
+        let Ok(addr) = Multiaddr::from_str(raw) else {
+            continue;
+        };
+        let mut host: Option<String> = None;
+        let mut port: Option<u16> = None;
+        for protocol in addr.iter() {
+            match protocol {
+                Protocol::Ip4(ip) => host = Some(ip.to_string()),
+                Protocol::Ip6(ip) => host = Some(ip.to_string()),
+                Protocol::Dns(name)
+                | Protocol::Dns4(name)
+                | Protocol::Dns6(name)
+                | Protocol::Dnsaddr(name) => host = Some(name.to_string()),
+                Protocol::Tcp(value) | Protocol::Udp(value) => {
+                    if port.is_none() {
+                        port = Some(value);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let Some(host) = host else {
+            continue;
+        };
+        let Some(port) = port else {
+            continue;
+        };
+        let is_loopback = host
+            .parse::<std::net::IpAddr>()
+            .map(|value| value.is_loopback())
+            .unwrap_or(false);
+        if !is_loopback {
+            return Some((host, port));
+        }
+        if fallback.is_none() {
+            fallback = Some((host, port));
+        }
+    }
+    fallback
+}
+
 fn topic_topic(topic: &str) -> String {
     format!("agentmesh.topic.v1.{}", topic)
 }
@@ -946,6 +1005,53 @@ fn remove_upnp_addr(state: &RuntimeState, addr: &Multiaddr) {
         if reachability.public_address.as_deref() == Some(value.as_str()) {
             reachability.public_address = reachability.external_addrs.first().cloned();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{discovered_peer_from_profile, pick_best_addr};
+    use crate::models::{MeshProfileRecord, PeerRecord};
+    use chrono::Utc;
+
+    #[test]
+    fn pick_best_addr_prefers_non_loopback() {
+        let value = pick_best_addr(&[
+            "/ip4/127.0.0.1/tcp/4500".to_string(),
+            "/ip4/192.168.1.50/tcp/4500".to_string(),
+        ]);
+        assert_eq!(value, Some(("192.168.1.50".to_string(), 4500)));
+    }
+
+    #[test]
+    fn discovered_profile_marks_peer_visible() {
+        let peer = PeerRecord {
+            peer_id: "peer-1".to_string(),
+            label: None,
+            agent_label: Some("peer".to_string()),
+            agent_description: Some("peer".to_string()),
+            interests: vec!["local".to_string()],
+            host: "127.0.0.1".to_string(),
+            port: 4500,
+            public_key: "pub".to_string(),
+            encryption_public_key: "enc".to_string(),
+            relay_url: None,
+            notes: None,
+            discovered: false,
+            last_seen_at: None,
+            created_at: Utc::now(),
+        };
+        let profile = MeshProfileRecord {
+            transport_peer_id: "transport-1".to_string(),
+            peer,
+            subscriptions: vec!["market.alerts".to_string()],
+            listen_addrs: vec!["/ip4/192.168.1.77/tcp/4509".to_string()],
+        };
+        let discovered = discovered_peer_from_profile(&profile);
+        assert!(discovered.discovered);
+        assert_eq!(discovered.host, "192.168.1.77");
+        assert_eq!(discovered.port, 4509);
+        assert!(discovered.last_seen_at.is_some());
     }
 }
 

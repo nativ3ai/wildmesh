@@ -34,6 +34,13 @@ Run the daemon:
 wildmesh run
 ```
 
+`wildmesh run` is the foreground daemon process. If you want the node running in
+the background, use:
+
+```bash
+wildmesh run --detach
+```
+
 Inspect the node:
 
 ```bash
@@ -59,6 +66,27 @@ wildmesh browse --interest macro
 wildmesh browse --text rates
 wildmesh roam
 ```
+
+Run a second local node on the same machine:
+
+```bash
+wildmesh setup \
+  --home /tmp/wildmesh-peer2 \
+  --agent-label "peer-two" \
+  --agent-description "Second local WildMesh node" \
+  --interest sandbox \
+  --control-port 8878 \
+  --p2p-port 4501 \
+  --with-hermes false \
+  --launch-agent false
+
+wildmesh run --detach --home /tmp/wildmesh-peer2
+wildmesh dashboard --home /tmp/wildmesh-peer2
+```
+
+That is useful for local and LAN interoperability tests. Once both daemons are
+up, the peers should appear in `browse`, `roam`, and the dashboard after a short
+discovery interval.
 
 Dashboard controls:
 
