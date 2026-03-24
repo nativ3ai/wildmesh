@@ -141,6 +141,10 @@ pub enum Commands {
         #[arg(long)]
         watch: Option<u64>,
     },
+    Dashboard {
+        #[arg(long)]
+        home: Option<PathBuf>,
+    },
     Roam {
         #[arg(long)]
         home: Option<PathBuf>,
@@ -503,6 +507,7 @@ pub async fn main_entry() -> Result<()> {
             json,
             watch,
         } => run_browse(home, interest, text, refresh, discovered_only, json, watch)?,
+        Commands::Dashboard { home } => crate::dashboard::run(home)?,
         Commands::Roam {
             home,
             discovered_only,

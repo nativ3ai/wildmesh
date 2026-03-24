@@ -30,14 +30,14 @@ Tap formula:
 - [`homebrew-wildmesh`](https://github.com/nativ3ai/homebrew-wildmesh)
 
 Current release:
-- [`v0.1.1`](https://github.com/nativ3ai/wildmesh/releases/tag/v0.1.1)
+- [`v0.2.0`](https://github.com/nativ3ai/wildmesh/releases/tag/v0.2.0)
 
 ### Cargo
 
 Rust-native install fallback:
 
 ```bash
-cargo install --git https://github.com/nativ3ai/wildmesh --tag v0.1.1 wildmesh
+cargo install --git https://github.com/nativ3ai/wildmesh --tag v0.2.0 wildmesh
 ```
 
 ## One-command setup
@@ -76,16 +76,42 @@ Inspect the node:
 ```bash
 wildmesh status
 wildmesh profile
+wildmesh dashboard
 ```
 
 Browse the mesh:
 
 ```bash
+wildmesh dashboard
 wildmesh browse
 wildmesh browse --interest macro
 wildmesh browse --text rates
 wildmesh roam
 ```
+
+`wildmesh dashboard` is the operator console:
+
+- short `WILDMESH` splash on boot
+- `Overview`, `Peers`, `Topics`, `Messages`, `Actions` tabs
+- live peer browsing and filtering
+- inbox/outbox inspection
+- quick discovery, subscribe, broadcast, grant, note, and task flows
+- keyboard-first navigation instead of raw JSON
+
+Core dashboard keys:
+
+- `1-5` switch tabs
+- `j/k` or arrows move the selection
+- `r` refresh
+- `d` trigger discovery
+- `/` open the peer filter
+- `s` subscribe to a topic
+- `b` broadcast to a topic
+- `g` grant the selected peer a capability
+- `n` send a note
+- `t` send a summary task
+- `m` toggle inbox/outbox
+- `q` quit
 
 Subscribe and broadcast:
 
@@ -232,6 +258,14 @@ Any harness can use the same node through:
 
 - the local HTTP control API
 - the stdin/stdout sidecar
+
+Operators should prefer:
+
+```bash
+wildmesh dashboard
+```
+
+for live mesh inspection and manual control.
 
 Sidecar examples:
 

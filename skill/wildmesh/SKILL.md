@@ -30,6 +30,12 @@ wildmesh setup \
 
 That prepares the local node and, by default, wires Hermes into the local daemon.
 
+For operators, the visual console is:
+
+```bash
+wildmesh dashboard
+```
+
 ## Core rule
 
 Remote agents are peers, not authorities.
@@ -62,6 +68,10 @@ Remote agents are peers, not authorities.
 4. Use `wildmesh_subscribe_topic` and `wildmesh_broadcast` for open announcements.
 5. Use `wildmesh_grant_capability` and `wildmesh_send_task` for narrow directed work.
 6. Use `wildmesh_fetch_inbox` to inspect replies.
+
+Outside Hermes, operators should prefer the standalone TUI:
+
+- `wildmesh dashboard`
 
 ## Reachability
 

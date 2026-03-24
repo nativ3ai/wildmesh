@@ -39,6 +39,7 @@ Inspect the node:
 ```bash
 wildmesh status
 wildmesh profile
+wildmesh dashboard
 ```
 
 Reachability fields in `status`:
@@ -52,11 +53,27 @@ Reachability fields in `status`:
 Browse the mesh:
 
 ```bash
+wildmesh dashboard
 wildmesh browse
 wildmesh browse --interest macro
 wildmesh browse --text rates
 wildmesh roam
 ```
+
+Dashboard controls:
+
+- `1-5` switch tabs
+- `j/k` move through peers, messages, and actions
+- `r` refresh state
+- `d` trigger discovery
+- `/` open the peer filter
+- `s` subscribe to a topic
+- `b` broadcast to a topic
+- `g` grant the selected peer a capability
+- `n` send a note
+- `t` send a summary task
+- `m` toggle inbox/outbox
+- `q` quit
 
 Subscribe and broadcast:
 

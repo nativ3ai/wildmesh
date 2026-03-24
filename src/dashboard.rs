@@ -1,0 +1,1595 @@
+use std::io;
+use std::path::PathBuf;
+use std::time::{Duration, Instant};
+
+use anyhow::{Context, Result};
+use chrono::{DateTime, Local, Utc};
+use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::execute;
+use crossterm::terminal::{
+    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+};
+use ratatui::backend::CrosstermBackend;
+use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::symbols::border;
+use ratatui::text::{Line, Span, Text};
+use ratatui::widgets::{
+    Block, Borders, Clear, Gauge, List, ListItem, ListState, Paragraph, Tabs, Wrap,
+};
+use ratatui::{Frame, Terminal};
+use reqwest::blocking::Client;
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+
+use crate::config::AgentMeshConfig;
+use crate::models::{CapabilityGrant, MessageKind, PeerRecord, StatusResponse, StoredMessage, SubscriptionRecord};
+
+const REFRESH_INTERVAL: Duration = Duration::from_secs(3);
+const EVENT_POLL: Duration = Duration::from_millis(120);
+const TOAST_TTL: Duration = Duration::from_secs(4);
+
+const LOGO: [&str; 5] = [
+    "__        ___ _     ____  __  __ _____ ____  _   _",
+    "\\ \\      / (_) |   |  _ \\|  \\/  | ____/ ___|| | | |",
+    " \\ \\ /\\ / /| | |   | | | | |\\/| |  _| \\___ \\| |_| |",
+    "  \\ V  V / | | |___| |_| | |  | | |___ ___) |  _  |",
+    "   \\_/\\_/  |_|_____|____/|_|  |_|_____|____/|_| |_|",
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TabPage {
+    Overview,
+    Peers,
+    Topics,
+    Messages,
+    Actions,
+}
+
+impl TabPage {
+    fn all() -> [Self; 5] {
+        [
+            Self::Overview,
+            Self::Peers,
+            Self::Topics,
+            Self::Messages,
+            Self::Actions,
+        ]
+    }
+
+    fn title(self) -> &'static str {
+        match self {
+            Self::Overview => "OVERVIEW",
+            Self::Peers => "PEERS",
+            Self::Topics => "TOPICS",
+            Self::Messages => "MESSAGES",
+            Self::Actions => "ACTIONS",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MessagePane {
+    Inbox,
+    Outbox,
+}
+
+impl MessagePane {
+    fn toggle(&mut self) {
+        *self = match self {
+            Self::Inbox => Self::Outbox,
+            Self::Outbox => Self::Inbox,
+        };
+    }
+
+    fn title(self) -> &'static str {
+        match self {
+            Self::Inbox => "INBOX",
+            Self::Outbox => "OUTBOX",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ActionItem {
+    DiscoverNow,
+    SubscribeTopic,
+    BroadcastTopic,
+    GrantSelectedPeer,
+    SendNoteSelectedPeer,
+    SendSummaryTask,
+    ToggleMessagePane,
+}
+
+impl ActionItem {
+    fn all() -> [Self; 7] {
+        [
+            Self::DiscoverNow,
+            Self::SubscribeTopic,
+            Self::BroadcastTopic,
+            Self::GrantSelectedPeer,
+            Self::SendNoteSelectedPeer,
+            Self::SendSummaryTask,
+            Self::ToggleMessagePane,
+        ]
+    }
+
+    fn title(self) -> &'static str {
+        match self {
+            Self::DiscoverNow => "Discover the wilderness",
+            Self::SubscribeTopic => "Subscribe to a public topic",
+            Self::BroadcastTopic => "Broadcast an update",
+            Self::GrantSelectedPeer => "Grant selected peer a capability",
+            Self::SendNoteSelectedPeer => "Send selected peer a note",
+            Self::SendSummaryTask => "Send selected peer a summary task",
+            Self::ToggleMessagePane => "Toggle inbox / outbox",
+        }
+    }
+
+    fn detail(self) -> &'static str {
+        match self {
+            Self::DiscoverNow => "Trigger a fresh discovery pass through the mesh bootstrap set.",
+            Self::SubscribeTopic => "Join a public topic so other nodes can see what this node follows.",
+            Self::BroadcastTopic => "Publish a public message to a topic. Good for open chatter.",
+            Self::GrantSelectedPeer => "Grant the selected peer one narrow capability label.",
+            Self::SendNoteSelectedPeer => "Send a plain note to the selected peer.",
+            Self::SendSummaryTask => "Send a task_offer using the summary capability to the selected peer.",
+            Self::ToggleMessagePane => "Flip the message view between inbound and outbound traffic.",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+enum ModalKind {
+    PeerFilter,
+    SubscribeTopic,
+    BroadcastTopic,
+    BroadcastBody { topic: String },
+    GrantCapability { peer_id: String },
+    SendNote { peer_id: String },
+    SendSummaryTask { peer_id: String },
+}
+
+#[derive(Debug, Clone)]
+struct ModalState {
+    kind: ModalKind,
+    title: String,
+    prompt: String,
+    input: String,
+}
+
+impl ModalState {
+    fn new(kind: ModalKind, title: impl Into<String>, prompt: impl Into<String>, input: impl Into<String>) -> Self {
+        Self {
+            kind,
+            title: title.into(),
+            prompt: prompt.into(),
+            input: input.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct Toast {
+    message: String,
+    created_at: Instant,
+    color: Color,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct DashboardProfile {
+    agent_label: Option<String>,
+    agent_description: Option<String>,
+    interests: Vec<String>,
+    control_url: String,
+    p2p_endpoint: String,
+    public_api_url: String,
+    bootstrap_urls: Vec<String>,
+    nat_status: String,
+    public_address: Option<String>,
+    listen_addrs: Vec<String>,
+    external_addrs: Vec<String>,
+    upnp_mapped_addrs: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct DashboardSnapshot {
+    profile: Option<DashboardProfile>,
+    status: Option<StatusResponse>,
+    peers: Vec<PeerRecord>,
+    grants: Vec<CapabilityGrant>,
+    subscriptions: Vec<SubscriptionRecord>,
+    inbox: Vec<StoredMessage>,
+    outbox: Vec<StoredMessage>,
+}
+
+struct DashboardClient {
+    base: String,
+    http: Client,
+}
+
+impl DashboardClient {
+    fn new(home: &PathBuf) -> Result<Self> {
+        let cfg = AgentMeshConfig::load_or_create(home)?;
+        Ok(Self {
+            base: cfg.control_url(),
+            http: Client::builder().build()?,
+        })
+    }
+
+    fn get<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
+        Ok(self
+            .http
+            .get(format!("{}{}", self.base, path))
+            .send()
+            .context("send dashboard GET")?
+            .error_for_status()
+            .context("dashboard GET status")?
+            .json()?)
+    }
+
+    fn post<T: DeserializeOwned>(&self, path: &str, payload: &Value) -> Result<T> {
+        Ok(self
+            .http
+            .post(format!("{}{}", self.base, path))
+            .json(payload)
+            .send()
+            .context("send dashboard POST")?
+            .error_for_status()
+            .context("dashboard POST status")?
+            .json()?)
+    }
+
+    fn snapshot(&self) -> Result<DashboardSnapshot> {
+        Ok(DashboardSnapshot {
+            profile: None,
+            status: self.get("/v1/status").ok(),
+            peers: self.get("/v1/peers").unwrap_or_default(),
+            grants: self.get("/v1/capabilities").unwrap_or_default(),
+            subscriptions: self.get("/v1/subscriptions").unwrap_or_default(),
+            inbox: self.get("/v1/messages/inbox?limit=50").unwrap_or_default(),
+            outbox: self.get("/v1/messages/outbox?limit=50").unwrap_or_default(),
+        })
+    }
+
+    fn load_profile(&self, home: &PathBuf) -> Result<DashboardProfile> {
+        let cfg = AgentMeshConfig::load_or_create(home)?;
+        let status = self.get::<StatusResponse>("/v1/status").ok();
+        Ok(DashboardProfile {
+            agent_label: cfg.agent_label.clone(),
+            agent_description: cfg.agent_description.clone(),
+            interests: cfg.interests.clone(),
+            control_url: cfg.control_url(),
+            p2p_endpoint: cfg.p2p_endpoint(),
+            public_api_url: cfg.public_api_url(),
+            bootstrap_urls: cfg.bootstrap_urls.clone(),
+            nat_status: status
+                .as_ref()
+                .map(|item| item.reachability.nat_status.clone())
+                .unwrap_or_else(|| "unknown".to_string()),
+            public_address: status
+                .as_ref()
+                .and_then(|item| item.reachability.public_address.clone()),
+            listen_addrs: status
+                .as_ref()
+                .map(|item| item.reachability.listen_addrs.clone())
+                .unwrap_or_default(),
+            external_addrs: status
+                .as_ref()
+                .map(|item| item.reachability.external_addrs.clone())
+                .unwrap_or_default(),
+            upnp_mapped_addrs: status
+                .as_ref()
+                .map(|item| item.reachability.upnp_mapped_addrs.clone())
+                .unwrap_or_default(),
+        })
+    }
+}
+
+struct DashboardApp {
+    home: PathBuf,
+    client: DashboardClient,
+    tab: usize,
+    peer_index: usize,
+    message_index: usize,
+    action_index: usize,
+    message_pane: MessagePane,
+    peer_filter: String,
+    snapshot: DashboardSnapshot,
+    last_refresh: Instant,
+    last_discover: Instant,
+    splash_started: Instant,
+    modal: Option<ModalState>,
+    toast: Option<Toast>,
+    last_error: Option<String>,
+}
+
+impl DashboardApp {
+    fn new(home: PathBuf) -> Result<Self> {
+        let client = DashboardClient::new(&home)?;
+        let mut snapshot = DashboardSnapshot::default();
+        let mut last_error = None;
+        match client.snapshot() {
+            Ok(mut value) => {
+                value.profile = Some(client.load_profile(&home)?);
+                snapshot = value;
+            }
+            Err(err) => {
+                last_error = Some(err.to_string());
+                snapshot.profile = Some(client.load_profile(&home)?);
+            }
+        }
+        Ok(Self {
+            home,
+            client,
+            tab: 0,
+            peer_index: 0,
+            message_index: 0,
+            action_index: 0,
+            message_pane: MessagePane::Inbox,
+            peer_filter: String::new(),
+            snapshot,
+            last_refresh: Instant::now(),
+            last_discover: Instant::now() - Duration::from_secs(60),
+            splash_started: Instant::now(),
+            modal: None,
+            toast: None,
+            last_error,
+        })
+    }
+
+    fn current_tab(&self) -> TabPage {
+        TabPage::all()[self.tab]
+    }
+
+    fn selected_peer(&self) -> Option<&PeerRecord> {
+        self.filtered_peers().get(self.peer_index).copied()
+    }
+
+    fn filtered_peers(&self) -> Vec<&PeerRecord> {
+        let term = self.peer_filter.trim().to_lowercase();
+        self.snapshot
+            .peers
+            .iter()
+            .filter(|peer| {
+                if term.is_empty() {
+                    return true;
+                }
+                let haystack = [
+                    peer.peer_id.as_str(),
+                    peer.label.as_deref().unwrap_or_default(),
+                    peer.agent_label.as_deref().unwrap_or_default(),
+                    peer.agent_description.as_deref().unwrap_or_default(),
+                    peer.host.as_str(),
+                    &peer.interests.join(" "),
+                ]
+                .join(" ")
+                .to_lowercase();
+                haystack.contains(&term)
+            })
+            .collect()
+    }
+
+    fn current_messages(&self) -> &[StoredMessage] {
+        match self.message_pane {
+            MessagePane::Inbox => &self.snapshot.inbox,
+            MessagePane::Outbox => &self.snapshot.outbox,
+        }
+    }
+
+    fn action_items(&self) -> [ActionItem; 7] {
+        ActionItem::all()
+    }
+
+    fn show_toast(&mut self, message: impl Into<String>, color: Color) {
+        self.toast = Some(Toast {
+            message: message.into(),
+            created_at: Instant::now(),
+            color,
+        });
+    }
+
+    fn clear_expired_toast(&mut self) {
+        if self
+            .toast
+            .as_ref()
+            .map(|toast| toast.created_at.elapsed() > TOAST_TTL)
+            .unwrap_or(false)
+        {
+            self.toast = None;
+        }
+    }
+
+    fn refresh(&mut self) {
+        match self.client.snapshot() {
+            Ok(mut value) => {
+                value.profile = self.client.load_profile(&self.home).ok().or(value.profile);
+                self.snapshot = value;
+                self.last_refresh = Instant::now();
+                self.last_error = None;
+                self.clamp_selection();
+            }
+            Err(err) => {
+                self.last_error = Some(err.to_string());
+                self.show_toast("daemon unreachable; keeping last known state", Color::Yellow);
+            }
+        }
+    }
+
+    fn discover_now(&mut self) {
+        match self.client.post::<Value>("/v1/discovery/announce", &json!({})) {
+            Ok(_) => {
+                self.last_discover = Instant::now();
+                self.refresh();
+                self.show_toast("mesh discovery pulse sent", Color::Cyan);
+            }
+            Err(err) => {
+                self.last_error = Some(err.to_string());
+                self.show_toast("discovery failed", Color::Red);
+            }
+        }
+    }
+
+    fn subscribe(&mut self, topic: &str) {
+        match self
+            .client
+            .post::<SubscriptionRecord>("/v1/subscriptions", &json!({ "topic": topic }))
+        {
+            Ok(_) => {
+                self.refresh();
+                self.show_toast(format!("subscribed to {topic}"), Color::Green);
+            }
+            Err(err) => {
+                self.last_error = Some(err.to_string());
+                self.show_toast("subscription failed", Color::Red);
+            }
+        }
+    }
+
+    fn broadcast(&mut self, topic: &str, body: &str) {
+        let payload = json!({
+            "topic": topic,
+            "body": parse_body(body),
+        });
+        match self
+            .client
+            .post::<crate::models::BroadcastResponse>("/v1/messages/broadcast", &payload)
+        {
+            Ok(result) => {
+                self.refresh();
+                self.show_toast(
+                    format!("broadcast to {} peers on {}", result.attempted_peers, topic),
+                    Color::Green,
+                );
+            }
+            Err(err) => {
+                self.last_error = Some(err.to_string());
+                self.show_toast("broadcast failed", Color::Red);
+            }
+        }
+    }
+
+    fn grant(&mut self, peer_id: &str, capability: &str) {
+        let payload = json!({
+            "peer_id": peer_id,
+            "capability": capability,
+            "expires_at": Value::Null,
+            "note": "granted from dashboard",
+        });
+        match self
+            .client
+            .post::<CapabilityGrant>("/v1/capabilities/grants", &payload)
+        {
+            Ok(_) => {
+                self.refresh();
+                self.show_toast(format!("granted {capability}"), Color::Green);
+            }
+            Err(err) => {
+                self.last_error = Some(err.to_string());
+                self.show_toast("grant failed", Color::Red);
+            }
+        }
+    }
+
+    fn send_note(&mut self, peer_id: &str, body: &str) {
+        let payload = json!({
+            "peer_id": peer_id,
+            "kind": "note",
+            "body": parse_body(body),
+            "capability": Value::Null,
+        });
+        self.send_payload(payload, "note sent");
+    }
+
+    fn send_summary_task(&mut self, peer_id: &str, prompt: &str) {
+        let payload = json!({
+            "peer_id": peer_id,
+            "kind": "task_offer",
+            "body": { "prompt": prompt },
+            "capability": "summary",
+        });
+        self.send_payload(payload, "summary task sent");
+    }
+
+    fn send_payload(&mut self, payload: Value, success_message: &str) {
+        match self
+            .client
+            .post::<crate::models::SendMessageResponse>("/v1/messages/send", &payload)
+        {
+            Ok(result) => {
+                self.refresh();
+                self.show_toast(
+                    format!("{} ({})", success_message, result.delivery_status),
+                    Color::Green,
+                );
+            }
+            Err(err) => {
+                self.last_error = Some(err.to_string());
+                self.show_toast("message send failed", Color::Red);
+            }
+        }
+    }
+
+    fn clamp_selection(&mut self) {
+        let peer_len = self.filtered_peers().len();
+        if peer_len == 0 {
+            self.peer_index = 0;
+        } else {
+            self.peer_index = self.peer_index.min(peer_len.saturating_sub(1));
+        }
+        let message_len = self.current_messages().len();
+        if message_len == 0 {
+            self.message_index = 0;
+        } else {
+            self.message_index = self.message_index.min(message_len.saturating_sub(1));
+        }
+        self.action_index = self
+            .action_index
+            .min(self.action_items().len().saturating_sub(1));
+    }
+
+    fn open_modal(&mut self, modal: ModalState) {
+        self.modal = Some(modal);
+    }
+
+    fn open_peer_filter(&mut self) {
+        self.open_modal(ModalState::new(
+            ModalKind::PeerFilter,
+            "PEER FILTER",
+            "Filter peers by label, description, host, or interests",
+            self.peer_filter.clone(),
+        ));
+    }
+
+    fn open_subscribe(&mut self) {
+        self.open_modal(ModalState::new(
+            ModalKind::SubscribeTopic,
+            "SUBSCRIBE",
+            "Enter a topic name like market.alerts",
+            "",
+        ));
+    }
+
+    fn open_broadcast_topic(&mut self) {
+        self.open_modal(ModalState::new(
+            ModalKind::BroadcastTopic,
+            "BROADCAST",
+            "Enter the topic to publish to",
+            "",
+        ));
+    }
+
+    fn open_grant(&mut self) {
+        if let Some(peer) = self.selected_peer() {
+            self.open_modal(ModalState::new(
+                ModalKind::GrantCapability {
+                    peer_id: peer.peer_id.clone(),
+                },
+                "GRANT CAPABILITY",
+                &format!("Grant a capability to {}", short_peer(&peer.peer_id)),
+                "summary",
+            ));
+        } else {
+            self.show_toast("select a peer first", Color::Yellow);
+        }
+    }
+
+    fn open_note(&mut self) {
+        if let Some(peer) = self.selected_peer() {
+            self.open_modal(ModalState::new(
+                ModalKind::SendNote {
+                    peer_id: peer.peer_id.clone(),
+                },
+                "SEND NOTE",
+                &format!("Note for {}", short_peer(&peer.peer_id)),
+                "",
+            ));
+        } else {
+            self.show_toast("select a peer first", Color::Yellow);
+        }
+    }
+
+    fn open_summary_task(&mut self) {
+        if let Some(peer) = self.selected_peer() {
+            self.open_modal(ModalState::new(
+                ModalKind::SendSummaryTask {
+                    peer_id: peer.peer_id.clone(),
+                },
+                "SEND SUMMARY TASK",
+                &format!("Prompt for {}", short_peer(&peer.peer_id)),
+                "",
+            ));
+        } else {
+            self.show_toast("select a peer first", Color::Yellow);
+        }
+    }
+
+    fn submit_modal(&mut self) {
+        let Some(modal) = self.modal.clone() else {
+            return;
+        };
+        let value = modal.input.trim().to_string();
+        match modal.kind {
+            ModalKind::PeerFilter => {
+                self.peer_filter = value;
+                self.peer_index = 0;
+                self.modal = None;
+            }
+            ModalKind::SubscribeTopic => {
+                if value.is_empty() {
+                    self.show_toast("topic cannot be empty", Color::Yellow);
+                } else {
+                    self.subscribe(&value);
+                    self.modal = None;
+                }
+            }
+            ModalKind::BroadcastTopic => {
+                if value.is_empty() {
+                    self.show_toast("topic cannot be empty", Color::Yellow);
+                } else {
+                    self.open_modal(ModalState::new(
+                        ModalKind::BroadcastBody { topic: value.clone() },
+                        "BROADCAST BODY",
+                        "Enter JSON or plain text for the broadcast payload",
+                        "{\"text\":\"\"}",
+                    ));
+                }
+            }
+            ModalKind::BroadcastBody { topic } => {
+                if value.is_empty() {
+                    self.show_toast("body cannot be empty", Color::Yellow);
+                } else {
+                    self.broadcast(&topic, &value);
+                    self.modal = None;
+                }
+            }
+            ModalKind::GrantCapability { peer_id } => {
+                if value.is_empty() {
+                    self.show_toast("capability cannot be empty", Color::Yellow);
+                } else {
+                    self.grant(&peer_id, &value);
+                    self.modal = None;
+                }
+            }
+            ModalKind::SendNote { peer_id } => {
+                if value.is_empty() {
+                    self.show_toast("note cannot be empty", Color::Yellow);
+                } else {
+                    self.send_note(&peer_id, &value);
+                    self.modal = None;
+                }
+            }
+            ModalKind::SendSummaryTask { peer_id } => {
+                if value.is_empty() {
+                    self.show_toast("task prompt cannot be empty", Color::Yellow);
+                } else {
+                    self.send_summary_task(&peer_id, &value);
+                    self.modal = None;
+                }
+            }
+        }
+    }
+
+    fn perform_action(&mut self) {
+        match self.action_items()[self.action_index] {
+            ActionItem::DiscoverNow => self.discover_now(),
+            ActionItem::SubscribeTopic => self.open_subscribe(),
+            ActionItem::BroadcastTopic => self.open_broadcast_topic(),
+            ActionItem::GrantSelectedPeer => self.open_grant(),
+            ActionItem::SendNoteSelectedPeer => self.open_note(),
+            ActionItem::SendSummaryTask => self.open_summary_task(),
+            ActionItem::ToggleMessagePane => {
+                self.message_pane.toggle();
+                self.message_index = 0;
+            }
+        }
+    }
+}
+
+struct TerminalGuard;
+
+impl TerminalGuard {
+    fn enter() -> Result<Self> {
+        enable_raw_mode()?;
+        execute!(io::stdout(), EnterAlternateScreen)?;
+        Ok(Self)
+    }
+}
+
+impl Drop for TerminalGuard {
+    fn drop(&mut self) {
+        let _ = disable_raw_mode();
+        let _ = execute!(io::stdout(), LeaveAlternateScreen);
+    }
+}
+
+pub fn run(home: Option<PathBuf>) -> Result<()> {
+    let home = home.unwrap_or_else(AgentMeshConfig::home_dir);
+    let mut app = DashboardApp::new(home)?;
+    let _guard = TerminalGuard::enter()?;
+    let backend = CrosstermBackend::new(io::stdout());
+    let mut terminal = Terminal::new(backend)?;
+    terminal.clear()?;
+
+    loop {
+        if app.splash_started.elapsed() < Duration::from_millis(1400) {
+            terminal.draw(|frame| render_splash(frame, &app))?;
+        } else {
+            if app.last_refresh.elapsed() > REFRESH_INTERVAL && app.modal.is_none() {
+                app.refresh();
+            }
+            app.clear_expired_toast();
+            terminal.draw(|frame| render_dashboard(frame, &app))?;
+        }
+
+        if !event::poll(EVENT_POLL)? {
+            continue;
+        }
+
+        let Event::Key(key) = event::read()? else {
+            continue;
+        };
+        if key.kind != KeyEventKind::Press {
+            continue;
+        }
+
+        if app.splash_started.elapsed() < Duration::from_millis(1400)
+            && matches!(key.code, KeyCode::Enter | KeyCode::Char(' '))
+        {
+            app.splash_started = Instant::now() - Duration::from_millis(1400);
+            continue;
+        }
+
+        if let Some(modal) = app.modal.as_mut() {
+            match key.code {
+                KeyCode::Esc => app.modal = None,
+                KeyCode::Enter => app.submit_modal(),
+                KeyCode::Backspace => {
+                    modal.input.pop();
+                }
+                KeyCode::Char(c) => {
+                    if !key.modifiers.contains(KeyModifiers::CONTROL) {
+                        modal.input.push(c);
+                    }
+                }
+                _ => {}
+            }
+            continue;
+        }
+
+        match key.code {
+            KeyCode::Char('q') => break,
+            KeyCode::Char('1') => app.tab = 0,
+            KeyCode::Char('2') => app.tab = 1,
+            KeyCode::Char('3') => app.tab = 2,
+            KeyCode::Char('4') => app.tab = 3,
+            KeyCode::Char('5') => app.tab = 4,
+            KeyCode::Tab => app.tab = (app.tab + 1) % TabPage::all().len(),
+            KeyCode::BackTab => {
+                app.tab = if app.tab == 0 {
+                    TabPage::all().len() - 1
+                } else {
+                    app.tab - 1
+                };
+            }
+            KeyCode::Char('r') => app.refresh(),
+            KeyCode::Char('d') => app.discover_now(),
+            KeyCode::Char('/') => app.open_peer_filter(),
+            KeyCode::Char('s') => app.open_subscribe(),
+            KeyCode::Char('b') => app.open_broadcast_topic(),
+            KeyCode::Char('g') => app.open_grant(),
+            KeyCode::Char('n') => app.open_note(),
+            KeyCode::Char('t') => app.open_summary_task(),
+            KeyCode::Char('m') => {
+                app.message_pane.toggle();
+                app.message_index = 0;
+            }
+            KeyCode::Enter if app.current_tab() == TabPage::Actions => app.perform_action(),
+            KeyCode::Down | KeyCode::Char('j') => match app.current_tab() {
+                TabPage::Peers => {
+                    let len = app.filtered_peers().len();
+                    if len > 0 {
+                        app.peer_index = (app.peer_index + 1).min(len - 1);
+                    }
+                }
+                TabPage::Messages => {
+                    let len = app.current_messages().len();
+                    if len > 0 {
+                        app.message_index = (app.message_index + 1).min(len - 1);
+                    }
+                }
+                TabPage::Actions => {
+                    let len = app.action_items().len();
+                    app.action_index = (app.action_index + 1).min(len - 1);
+                }
+                _ => {}
+            },
+            KeyCode::Up | KeyCode::Char('k') => match app.current_tab() {
+                TabPage::Peers => {
+                    app.peer_index = app.peer_index.saturating_sub(1);
+                }
+                TabPage::Messages => {
+                    app.message_index = app.message_index.saturating_sub(1);
+                }
+                TabPage::Actions => {
+                    app.action_index = app.action_index.saturating_sub(1);
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+        app.clamp_selection();
+    }
+
+    Ok(())
+}
+
+fn render_splash(frame: &mut Frame, app: &DashboardApp) {
+    let area = frame.area();
+    let progress = (app.splash_started.elapsed().as_millis() as f64 / 1400.0).clamp(0.0, 1.0);
+    let visible_lines = ((LOGO.len() as f64) * progress).ceil() as usize;
+    let title = LOGO
+        .iter()
+        .take(visible_lines.max(1))
+        .map(|line| Line::from(Span::styled(*line, Style::default().fg(Color::Cyan))))
+        .collect::<Vec<_>>();
+    let gauge = Gauge::default()
+        .block(block("BOOT"))
+        .gauge_style(Style::default().fg(Color::LightGreen).bg(Color::Black))
+        .percent((progress * 100.0) as u16)
+        .label("joining the mesh");
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage(25),
+            Constraint::Length(8),
+            Constraint::Length(3),
+            Constraint::Percentage(25),
+        ])
+        .split(area);
+    frame.render_widget(
+        Paragraph::new(Text::from(title))
+            .alignment(Alignment::Center)
+            .block(block("WILDMESH")),
+        layout[1],
+    );
+    frame.render_widget(gauge, layout[2]);
+}
+
+fn render_dashboard(frame: &mut Frame, app: &DashboardApp) {
+    let area = frame.area();
+    let root = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Min(10),
+            Constraint::Length(2),
+        ])
+        .split(area);
+
+    render_header(frame, root[0], app);
+
+    match app.current_tab() {
+        TabPage::Overview => render_overview(frame, root[1], app),
+        TabPage::Peers => render_peers(frame, root[1], app),
+        TabPage::Topics => render_topics(frame, root[1], app),
+        TabPage::Messages => render_messages(frame, root[1], app),
+        TabPage::Actions => render_actions(frame, root[1], app),
+    }
+
+    render_footer(frame, root[2], app);
+
+    if let Some(modal) = &app.modal {
+        render_modal(frame, area, modal);
+    }
+}
+
+fn render_header(frame: &mut Frame, area: Rect, app: &DashboardApp) {
+    let header = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Length(32), Constraint::Min(10)])
+        .split(area);
+
+    let status = app
+        .snapshot
+        .status
+        .as_ref()
+        .map(|status| {
+            format!(
+                "peer {}  nat {}",
+                short_peer(&status.identity.peer_id),
+                status.reachability.nat_status
+            )
+        })
+        .unwrap_or_else(|| "daemon offline".to_string());
+
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("WILDMESH", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::raw("  "),
+            Span::styled("P2P WILDERNESS", Style::default().fg(Color::LightMagenta)),
+        ]))
+        .block(block(&status)),
+        header[0],
+    );
+
+    let titles = TabPage::all()
+        .into_iter()
+        .map(|tab| Line::from(Span::styled(tab.title(), Style::default().fg(Color::White))))
+        .collect::<Vec<_>>();
+    frame.render_widget(
+        Tabs::new(titles)
+            .select(app.tab)
+            .block(block("MENU"))
+            .style(Style::default().fg(Color::Gray))
+            .highlight_style(
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        header[1],
+    );
+}
+
+fn render_overview(frame: &mut Frame, area: Rect, app: &DashboardApp) {
+    let columns = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Length(42), Constraint::Min(20)])
+        .split(area);
+    let left = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(8),
+            Constraint::Length(8),
+            Constraint::Min(6),
+        ])
+        .split(columns[0]);
+    let right = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(10), Constraint::Min(10)])
+        .split(columns[1]);
+
+    let profile = app.snapshot.profile.clone().unwrap_or_default();
+    let status = app.snapshot.status.clone();
+    let node_lines = vec![
+        Line::from(vec![
+            Span::styled("label ", neon(Color::LightGreen)),
+            Span::raw(profile.agent_label.unwrap_or_else(|| "<unset>".to_string())),
+        ]),
+        Line::from(vec![
+            Span::styled("desc  ", neon(Color::LightGreen)),
+            Span::raw(profile.agent_description.unwrap_or_else(|| "<unset>".to_string())),
+        ]),
+        Line::from(vec![
+            Span::styled("mesh  ", neon(Color::LightGreen)),
+            Span::raw(profile.interests.join(", ")),
+        ]),
+        Line::from(vec![
+            Span::styled("peer  ", neon(Color::LightGreen)),
+            Span::raw(
+                status
+                    .as_ref()
+                    .map(|value| value.identity.peer_id.clone())
+                    .unwrap_or_else(|| "<offline>".to_string()),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("p2p   ", neon(Color::LightGreen)),
+            Span::raw(profile.p2p_endpoint),
+        ]),
+        Line::from(vec![
+            Span::styled("ctrl  ", neon(Color::LightGreen)),
+            Span::raw(profile.control_url),
+        ]),
+    ];
+    frame.render_widget(
+        Paragraph::new(node_lines)
+            .block(block("NODE"))
+            .wrap(Wrap { trim: true }),
+        left[0],
+    );
+
+    let reach = status.as_ref().map(|value| &value.reachability);
+    let reach_lines = vec![
+        Line::from(vec![
+            Span::styled("nat     ", neon(Color::Yellow)),
+            Span::raw(reach.map(|item| item.nat_status.as_str()).unwrap_or("unknown")),
+        ]),
+        Line::from(vec![
+            Span::styled("public  ", neon(Color::Yellow)),
+            Span::raw(reach.and_then(|item| item.public_address.as_deref()).unwrap_or("<none>")),
+        ]),
+        Line::from(vec![
+            Span::styled("listen  ", neon(Color::Yellow)),
+            Span::raw(reach.map(|item| item.listen_addrs.len()).unwrap_or(0).to_string()),
+        ]),
+        Line::from(vec![
+            Span::styled("extern  ", neon(Color::Yellow)),
+            Span::raw(reach.map(|item| item.external_addrs.len()).unwrap_or(0).to_string()),
+        ]),
+        Line::from(vec![
+            Span::styled("upnp    ", neon(Color::Yellow)),
+            Span::raw(reach.map(|item| item.upnp_mapped_addrs.len()).unwrap_or(0).to_string()),
+        ]),
+        Line::from(vec![
+            Span::styled("last d  ", neon(Color::Yellow)),
+            Span::raw(format!("{}s ago", app.last_discover.elapsed().as_secs())),
+        ]),
+    ];
+    frame.render_widget(
+        Paragraph::new(reach_lines)
+            .block(block("REACHABILITY"))
+            .wrap(Wrap { trim: true }),
+        left[1],
+    );
+
+    let counts = vec![
+        gauge_line("PEERS", app.snapshot.peers.len() as u16, 50, Color::Cyan),
+        gauge_line(
+            "SUBS",
+            app.snapshot.subscriptions.len() as u16,
+            20,
+            Color::LightMagenta,
+        ),
+        gauge_line("INBOX", app.snapshot.inbox.len() as u16, 50, Color::Green),
+        gauge_line("OUTBOX", app.snapshot.outbox.len() as u16, 50, Color::Yellow),
+    ];
+    let counts_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(3); 4])
+        .split(left[2]);
+    for (idx, gauge) in counts.into_iter().enumerate() {
+        frame.render_widget(gauge, counts_layout[idx]);
+    }
+
+    frame.render_widget(
+        Paragraph::new(Text::from(vec![
+            Line::from(Span::styled("WILDERNESS RULES", neon(Color::Cyan))),
+            Line::from(""),
+            Line::from("1. discovery is open; authority is local"),
+            Line::from("2. remote payloads are still untrusted"),
+            Line::from("3. grants are narrow and explicit"),
+            Line::from("4. broadcasts are for chatter, not power"),
+            Line::from(""),
+            Line::from(Span::styled("HOT KEYS", neon(Color::LightMagenta))),
+            Line::from("r refresh   d discover   / filter   s subscribe"),
+            Line::from("b broadcast g grant      n note     t summary task"),
+            Line::from("1-5 tabs    j/k move     m toggle   q quit"),
+        ]))
+        .block(block("OPERATOR DECK"))
+        .wrap(Wrap { trim: true }),
+        right[0],
+    );
+
+    let log_lines = if let Some(error) = &app.last_error {
+        vec![
+            Line::from(Span::styled("LAST ERROR", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))),
+            Line::from(""),
+            Line::from(error.clone()),
+        ]
+    } else {
+        vec![
+            Line::from(Span::styled("STATE", neon(Color::Cyan))),
+            Line::from("daemon reachable"),
+            Line::from(format!("refresh age {}s", app.last_refresh.elapsed().as_secs())),
+            Line::from(format!("bootstrap peers {}", profile.bootstrap_urls.len())),
+        ]
+    };
+    frame.render_widget(
+        Paragraph::new(Text::from(log_lines))
+            .block(block("SIGNAL"))
+            .wrap(Wrap { trim: true }),
+        right[1],
+    );
+}
+
+fn render_peers(frame: &mut Frame, area: Rect, app: &DashboardApp) {
+    let columns = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
+        .split(area);
+    let peers = app.filtered_peers();
+    let items = if peers.is_empty() {
+        vec![ListItem::new("No peers matched the current filter.")]
+    } else {
+        peers
+            .iter()
+            .map(|peer| {
+                let title = peer
+                    .agent_label
+                    .clone()
+                    .or_else(|| peer.label.clone())
+                    .unwrap_or_else(|| short_peer(&peer.peer_id));
+                let detail = format!(
+                    "{}  [{}]  {}",
+                    short_peer(&peer.peer_id),
+                    peer.interests.join(", "),
+                    peer.host
+                );
+                ListItem::new(vec![
+                    Line::from(Span::styled(title, Style::default().fg(Color::White))),
+                    Line::from(Span::styled(detail, Style::default().fg(Color::DarkGray))),
+                ])
+            })
+            .collect()
+    };
+    let mut state = ListState::default();
+    if !peers.is_empty() {
+        state.select(Some(app.peer_index));
+    }
+    frame.render_stateful_widget(
+        List::new(items)
+            .block(block(&format!(
+                "PEERS  [{}]  filter={}",
+                peers.len(),
+                if app.peer_filter.is_empty() {
+                    "<none>"
+                } else {
+                    app.peer_filter.as_str()
+                }
+            )))
+            .highlight_style(
+                Style::default()
+                    .bg(Color::Cyan)
+                    .fg(Color::Black)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .highlight_symbol(">> "),
+        columns[0],
+        &mut state,
+    );
+
+    let detail = peers.get(app.peer_index).copied();
+    let detail_text = if let Some(peer) = detail {
+        let granted = app
+            .snapshot
+            .grants
+            .iter()
+            .filter(|grant| grant.peer_id == peer.peer_id)
+            .map(|grant| grant.capability.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        Text::from(vec![
+            Line::from(vec![
+                Span::styled("agent ", neon(Color::LightGreen)),
+                Span::raw(peer.agent_label.clone().unwrap_or_else(|| "<unknown>".to_string())),
+            ]),
+            Line::from(vec![
+                Span::styled("peer  ", neon(Color::LightGreen)),
+                Span::raw(peer.peer_id.clone()),
+            ]),
+            Line::from(vec![
+                Span::styled("desc  ", neon(Color::LightGreen)),
+                Span::raw(peer.agent_description.clone().unwrap_or_else(|| "-".to_string())),
+            ]),
+            Line::from(vec![
+                Span::styled("host  ", neon(Color::LightGreen)),
+                Span::raw(format!("{}:{}", peer.host, peer.port)),
+            ]),
+            Line::from(vec![
+                Span::styled("tags  ", neon(Color::LightGreen)),
+                Span::raw(if peer.interests.is_empty() {
+                    "-".to_string()
+                } else {
+                    peer.interests.join(", ")
+                }),
+            ]),
+            Line::from(vec![
+                Span::styled("route ", neon(Color::LightGreen)),
+                Span::raw(if peer.relay_url.is_some() { "relay-assisted" } else { "direct-advertised" }),
+            ]),
+            Line::from(vec![
+                Span::styled("seen  ", neon(Color::LightGreen)),
+                Span::raw(
+                    peer.last_seen_at
+                        .map(format_timestamp)
+                        .unwrap_or_else(|| "never".to_string()),
+                ),
+            ]),
+            Line::from(vec![
+                Span::styled("grant ", neon(Color::LightGreen)),
+                Span::raw(if granted.is_empty() {
+                    "<none>".to_string()
+                } else {
+                    granted
+                }),
+            ]),
+            Line::from(""),
+            Line::from(Span::styled("ACTIONS", neon(Color::LightMagenta))),
+            Line::from("g grant summary"),
+            Line::from("n send note"),
+            Line::from("t send summary task"),
+            Line::from("/ edit peer filter"),
+        ])
+    } else {
+        Text::from("No peer selected.")
+    };
+    frame.render_widget(
+        Paragraph::new(detail_text)
+            .block(block("PEER DETAIL"))
+            .wrap(Wrap { trim: true }),
+        columns[1],
+    );
+}
+
+fn render_topics(frame: &mut Frame, area: Rect, app: &DashboardApp) {
+    let layout = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
+        .split(area);
+    let sub_items = if app.snapshot.subscriptions.is_empty() {
+        vec![ListItem::new("No topic subscriptions yet.")]
+    } else {
+        app.snapshot
+            .subscriptions
+            .iter()
+            .map(|item| {
+                ListItem::new(vec![
+                    Line::from(Span::styled(item.topic.clone(), Style::default().fg(Color::White))),
+                    Line::from(Span::styled(
+                        format!("joined {}", format_timestamp(item.created_at)),
+                        Style::default().fg(Color::DarkGray),
+                    )),
+                ])
+            })
+            .collect()
+    };
+    frame.render_widget(
+        List::new(sub_items).block(block("SUBSCRIPTIONS")),
+        layout[0],
+    );
+
+    let mut lines = vec![
+        Line::from(Span::styled("HOW TO USE THE TOPIC LANE", neon(Color::Cyan))),
+        Line::from(""),
+        Line::from("s  subscribe to a topic"),
+        Line::from("b  broadcast a public update"),
+        Line::from("d  force a discovery pulse"),
+        Line::from(""),
+        Line::from(Span::styled("NOTES", neon(Color::LightMagenta))),
+        Line::from("Topics are open chat lanes."),
+        Line::from("They are good for announcements, matchmaking, and chatter."),
+        Line::from("They are not local authority."),
+        Line::from(""),
+    ];
+    if let Some(peer) = app.selected_peer() {
+        lines.push(Line::from(Span::styled("SELECTED PEER", neon(Color::Yellow))));
+        lines.push(Line::from(
+            peer.agent_label
+                .clone()
+                .unwrap_or_else(|| short_peer(&peer.peer_id)),
+        ));
+    }
+    frame.render_widget(
+        Paragraph::new(Text::from(lines))
+            .block(block("TOPIC CONSOLE"))
+            .wrap(Wrap { trim: true }),
+        layout[1],
+    );
+}
+
+fn render_messages(frame: &mut Frame, area: Rect, app: &DashboardApp) {
+    let layout = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
+        .split(area);
+    let messages = app.current_messages();
+    let items = if messages.is_empty() {
+        vec![ListItem::new("No messages in this lane yet.")]
+    } else {
+        messages
+            .iter()
+            .map(|item| {
+                let line1 = format!(
+                    "{}  {}  {}",
+                    short_peer(&item.peer_id),
+                    kind_label(&item.kind),
+                    status_label(&item.status)
+                );
+                let line2 = format_timestamp(item.created_at);
+                ListItem::new(vec![
+                    Line::from(Span::styled(line1, Style::default().fg(Color::White))),
+                    Line::from(Span::styled(line2, Style::default().fg(Color::DarkGray))),
+                ])
+            })
+            .collect()
+    };
+    let mut state = ListState::default();
+    if !messages.is_empty() {
+        state.select(Some(app.message_index));
+    }
+    frame.render_stateful_widget(
+        List::new(items)
+            .block(block(&format!("{}  [{}]", app.message_pane.title(), messages.len())))
+            .highlight_style(
+                Style::default()
+                    .bg(Color::LightMagenta)
+                    .fg(Color::Black)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .highlight_symbol(">> "),
+        layout[0],
+        &mut state,
+    );
+
+    let detail = messages.get(app.message_index);
+    let body_text = detail
+        .map(|message| serde_json::to_string_pretty(&message.body).unwrap_or_else(|_| "<body decode failed>".to_string()))
+        .unwrap_or_else(|| "No message selected.".to_string());
+    let meta_lines = if let Some(message) = detail {
+        vec![
+            Line::from(vec![
+                Span::styled("peer   ", neon(Color::LightGreen)),
+                Span::raw(message.peer_id.clone()),
+            ]),
+            Line::from(vec![
+                Span::styled("kind   ", neon(Color::LightGreen)),
+                Span::raw(kind_label(&message.kind)),
+            ]),
+            Line::from(vec![
+                Span::styled("status ", neon(Color::LightGreen)),
+                Span::raw(status_label(&message.status)),
+            ]),
+            Line::from(vec![
+                Span::styled("time   ", neon(Color::LightGreen)),
+                Span::raw(format_timestamp(message.created_at)),
+            ]),
+            Line::from(""),
+            Line::from(Span::styled("BODY", neon(Color::Cyan))),
+        ]
+    } else {
+        vec![Line::from("No message selected.")]
+    };
+    let mut text = meta_lines;
+    for line in body_text.lines() {
+        text.push(Line::from(line.to_string()));
+    }
+    frame.render_widget(
+        Paragraph::new(Text::from(text))
+            .block(block("MESSAGE DETAIL"))
+            .wrap(Wrap { trim: false }),
+        layout[1],
+    );
+}
+
+fn render_actions(frame: &mut Frame, area: Rect, app: &DashboardApp) {
+    let layout = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(42), Constraint::Percentage(58)])
+        .split(area);
+    let actions = app.action_items();
+    let items = actions
+        .iter()
+        .map(|item| ListItem::new(item.title()))
+        .collect::<Vec<_>>();
+    let mut state = ListState::default();
+    state.select(Some(app.action_index));
+    frame.render_stateful_widget(
+        List::new(items)
+            .block(block("ACTION MENU"))
+            .highlight_style(
+                Style::default()
+                    .bg(Color::Green)
+                    .fg(Color::Black)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .highlight_symbol(">> "),
+        layout[0],
+        &mut state,
+    );
+
+    let selected = actions[app.action_index];
+    let peer_text = app
+        .selected_peer()
+        .map(|peer| {
+            format!(
+                "{} ({})",
+                peer.agent_label.clone().unwrap_or_else(|| short_peer(&peer.peer_id)),
+                short_peer(&peer.peer_id)
+            )
+        })
+        .unwrap_or_else(|| "<none>".to_string());
+    let detail = Text::from(vec![
+        Line::from(Span::styled(selected.title(), neon(Color::Cyan))),
+        Line::from(""),
+        Line::from(selected.detail()),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("selected peer ", neon(Color::Yellow)),
+            Span::raw(peer_text),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled("PRESS ENTER TO RUN", neon(Color::LightMagenta))),
+        Line::from(""),
+        Line::from("Direct shortcuts work from any tab:"),
+        Line::from("d discover   s subscribe   b broadcast"),
+        Line::from("g grant      n note        t summary task"),
+        Line::from("m toggle inbox/outbox"),
+    ]);
+    frame.render_widget(
+        Paragraph::new(detail)
+            .block(block("ACTION DETAIL"))
+            .wrap(Wrap { trim: true }),
+        layout[1],
+    );
+}
+
+fn render_footer(frame: &mut Frame, area: Rect, app: &DashboardApp) {
+    let mut spans = vec![
+        Span::styled("1-5", neon(Color::Cyan)),
+        Span::raw(" tabs  "),
+        Span::styled("j/k", neon(Color::Cyan)),
+        Span::raw(" move  "),
+        Span::styled("r", neon(Color::Cyan)),
+        Span::raw(" refresh  "),
+        Span::styled("d", neon(Color::Cyan)),
+        Span::raw(" discover  "),
+        Span::styled("/", neon(Color::Cyan)),
+        Span::raw(" filter  "),
+        Span::styled("q", neon(Color::Cyan)),
+        Span::raw(" quit"),
+    ];
+    if let Some(toast) = &app.toast {
+        spans.push(Span::raw("  |  "));
+        spans.push(Span::styled(&toast.message, Style::default().fg(toast.color)));
+    } else if let Some(error) = &app.last_error {
+        spans.push(Span::raw("  |  "));
+        spans.push(Span::styled(truncate(error, 80), Style::default().fg(Color::Red)));
+    }
+    frame.render_widget(
+        Paragraph::new(Line::from(spans))
+            .alignment(Alignment::Left)
+            .block(block("CONSOLE")),
+        area,
+    );
+}
+
+fn render_modal(frame: &mut Frame, area: Rect, modal: &ModalState) {
+    let popup = centered_rect(68, 30, area);
+    frame.render_widget(Clear, popup);
+    let lines = vec![
+        Line::from(Span::styled(modal.prompt.clone(), neon(Color::Cyan))),
+        Line::from(""),
+        Line::from(modal.input.clone()),
+        Line::from(""),
+        Line::from(Span::styled("ENTER submit  ESC cancel", Style::default().fg(Color::DarkGray))),
+    ];
+    frame.render_widget(
+        Paragraph::new(Text::from(lines))
+            .block(block(&modal.title))
+            .wrap(Wrap { trim: false }),
+        popup,
+    );
+}
+
+fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - percent_y) / 2),
+            Constraint::Percentage(percent_y),
+            Constraint::Percentage((100 - percent_y) / 2),
+        ])
+        .split(area);
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage(percent_x),
+            Constraint::Percentage((100 - percent_x) / 2),
+        ])
+        .split(popup_layout[1])[1]
+}
+
+fn gauge_line<'a>(title: &'a str, value: u16, max: u16, color: Color) -> Gauge<'a> {
+    let pct = if max == 0 {
+        0
+    } else {
+        (((value as f64 / max as f64) * 100.0).min(100.0)) as u16
+    };
+    Gauge::default()
+        .block(block(title))
+        .gauge_style(Style::default().fg(color).bg(Color::Black))
+        .percent(pct)
+        .label(format!("{value}"))
+}
+
+fn block(title: &str) -> Block<'static> {
+    Block::default()
+        .title(Span::styled(
+            format!(" {title} "),
+            Style::default().fg(Color::LightYellow).add_modifier(Modifier::BOLD),
+        ))
+        .borders(Borders::ALL)
+        .border_set(border::DOUBLE)
+        .border_style(Style::default().fg(Color::DarkGray))
+}
+
+fn neon(color: Color) -> Style {
+    Style::default().fg(color).add_modifier(Modifier::BOLD)
+}
+
+fn short_peer(peer_id: &str) -> String {
+    peer_id.chars().take(12).collect()
+}
+
+fn format_timestamp(value: DateTime<Utc>) -> String {
+    value.with_timezone(&Local).format("%H:%M:%S").to_string()
+}
+
+fn kind_label(kind: &MessageKind) -> &'static str {
+    match kind {
+        MessageKind::Hello => "hello",
+        MessageKind::Broadcast => "broadcast",
+        MessageKind::PeerExchange => "peer_exchange",
+        MessageKind::TaskOffer => "task_offer",
+        MessageKind::TaskResult => "task_result",
+        MessageKind::Note => "note",
+        MessageKind::Receipt => "receipt",
+    }
+}
+
+fn status_label(status: &crate::models::MessageStatus) -> &'static str {
+    match status {
+        crate::models::MessageStatus::Received => "received",
+        crate::models::MessageStatus::Blocked => "blocked",
+        crate::models::MessageStatus::Queued => "queued",
+        crate::models::MessageStatus::Delivered => "delivered",
+        crate::models::MessageStatus::Failed => "failed",
+    }
+}
+
+fn parse_body(input: &str) -> Value {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return json!({});
+    }
+    serde_json::from_str(trimmed).unwrap_or_else(|_| json!({ "text": trimmed }))
+}
+
+fn truncate(value: &str, width: usize) -> String {
+    if value.chars().count() <= width {
+        return value.to_string();
+    }
+    let mut truncated = value.chars().take(width.saturating_sub(1)).collect::<String>();
+    truncated.push('…');
+    truncated
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_body;
+    use serde_json::json;
+
+    #[test]
+    fn parse_body_wraps_plain_text() {
+        assert_eq!(parse_body("hello"), json!({"text":"hello"}));
+    }
+
+    #[test]
+    fn parse_body_keeps_json() {
+        assert_eq!(parse_body("{\"headline\":\"ok\"}"), json!({"headline":"ok"}));
+    }
+}
