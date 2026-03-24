@@ -1,6 +1,6 @@
 [package]
 name = "wildmesh"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "Local-first peer-to-peer mesh for Hermes and other agent runtimes"
 authors = ["nativ3ai"]

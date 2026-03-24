@@ -1160,16 +1160,19 @@ fn install_launch_agent(home: &Path) -> Result<PathBuf> {
         );
         fs::write(&plist_path, plist)?;
         let domain = format!("gui/{uid}");
-        let _ = Command::new("launchctl")
-            .args(["bootout", &domain, plist_path.to_string_lossy().as_ref()])
-            .status();
-        Command::new("launchctl")
-            .args(["bootstrap", &domain, plist_path.to_string_lossy().as_ref()])
-            .status()
-            .context("run launchctl bootstrap")?;
-        let _ = Command::new("launchctl")
-            .args(["kickstart", "-k", &format!("{domain}/com.nativ3ai.wildmesh")])
-            .status();
+        let _ = run_launchctl(
+            ["bootout", &domain, plist_path.to_string_lossy().as_ref()],
+            true,
+        );
+        run_launchctl(
+            ["bootstrap", &domain, plist_path.to_string_lossy().as_ref()],
+            false,
+        )
+        .context("run launchctl bootstrap")?;
+        let _ = run_launchctl(
+            ["kickstart", "-k", &format!("{domain}/com.nativ3ai.wildmesh")],
+            true,
+        );
         Ok(plist_path)
     }
     #[cfg(not(target_os = "macos"))]
@@ -1177,6 +1180,25 @@ fn install_launch_agent(home: &Path) -> Result<PathBuf> {
         let _ = home;
         bail!("launch-agent setup is only supported on macOS right now")
     }
+}
+
+fn run_launchctl<const N: usize>(args: [&str; N], tolerate_failure: bool) -> Result<()> {
+    let output = Command::new("launchctl")
+        .args(args)
+        .output()
+        .context("run launchctl")?;
+    if output.status.success() || tolerate_failure {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if !stderr.is_empty() {
+        bail!("launchctl failed: {stderr}");
+    }
+    if !stdout.is_empty() {
+        bail!("launchctl failed: {stdout}");
+    }
+    bail!("launchctl failed with status {}", output.status);
 }
 
 fn current_uid() -> Result<u32> {
