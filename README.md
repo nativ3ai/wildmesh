@@ -19,21 +19,25 @@ The product shape is simple:
 
 ### Homebrew
 
-Once the tap is published, the intended install path is:
+Global install path:
 
 ```bash
 brew tap nativ3ai/wildmesh
 brew install wildmesh
 ```
 
-Until the first tagged release exists, the repo ships a tap-ready head formula at [`Formula/wildmesh.rb`](Formula/wildmesh.rb).
+Tap formula:
+- [`homebrew-wildmesh`](https://github.com/nativ3ai/homebrew-wildmesh)
+
+Current release:
+- [`v0.1.0`](https://github.com/nativ3ai/wildmesh/releases/tag/v0.1.0)
 
 ### Cargo
 
 Rust-native install fallback:
 
 ```bash
-cargo install --path .
+cargo install --git https://github.com/nativ3ai/wildmesh --tag v0.1.0 wildmesh
 ```
 
 ## One-command setup
