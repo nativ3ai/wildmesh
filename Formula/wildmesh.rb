@@ -15,7 +15,7 @@ class Wildmesh < Formula
 
   def install
     system "cargo", "install", *std_cargo_args(path: ".")
-    pkgshare.install "plugin.yaml", "plugin.py", "agentmesh", "skill", "docs", "README.md"
+    pkgshare.install "__init__.py", "plugin.yaml", "plugin.py", "agentmesh", "skill", "docs", "README.md"
   end
 
   test do

@@ -1770,6 +1770,8 @@ fn install_hermes_plugin(asset_root: &Path, hermes_home: &Path) -> Result<()> {
         remove_path(&skill_target)?;
     }
     fs::create_dir_all(&plugin_target)?;
+    fs::copy(asset_root.join("__init__.py"), plugin_target.join("__init__.py"))
+        .context("copy plugin __init__.py")?;
     fs::copy(
         asset_root.join("plugin.yaml"),
         plugin_target.join("plugin.yaml"),
@@ -1788,6 +1790,64 @@ fn install_hermes_plugin(asset_root: &Path, hermes_home: &Path) -> Result<()> {
     println!("installed plugin -> {}", plugin_target.display());
     println!("installed skill -> {}", skill_target.display());
     Ok(())
+}
+
+#[cfg(test)]
+mod cli_tests {
+    use super::install_hermes_plugin;
+    use std::fs;
+    use tempfile::tempdir;
+
+    #[test]
+    fn install_hermes_plugin_copies_directory_plugin_layout() {
+        let assets = tempdir().expect("asset dir");
+        let hermes_home = tempdir().expect("hermes home");
+        let root = assets.path();
+
+        fs::write(root.join("__init__.py"), "from .plugin import register\n").expect("write root init");
+        fs::write(root.join("plugin.py"), "from .agentmesh.plugin import register\n").expect("write root plugin");
+        fs::write(root.join("plugin.yaml"), "name: wildmesh\n").expect("write manifest");
+
+        let package_dir = root.join("agentmesh");
+        let hermes_plugin_dir = package_dir.join("hermes_plugin");
+        fs::create_dir_all(&hermes_plugin_dir).expect("create agentmesh tree");
+        fs::write(package_dir.join("__init__.py"), "from .hermes_plugin.plugin import register\n")
+            .expect("write package init");
+        fs::write(package_dir.join("plugin.py"), "from .hermes_plugin.plugin import register\n")
+            .expect("write package plugin");
+        fs::write(hermes_plugin_dir.join("__init__.py"), "from .plugin import register\n")
+            .expect("write hermes plugin init");
+        fs::write(hermes_plugin_dir.join("plugin.py"), "def register(ctx):\n    return None\n")
+            .expect("write hermes plugin register");
+
+        let skill_dir = root.join("skill").join("wildmesh");
+        fs::create_dir_all(&skill_dir).expect("create skill tree");
+        fs::write(skill_dir.join("SKILL.md"), "# WildMesh\n").expect("write skill");
+
+        install_hermes_plugin(root, hermes_home.path()).expect("install plugin");
+
+        let plugin_root = hermes_home.path().join("plugins").join("wildmesh");
+        assert!(plugin_root.join("__init__.py").is_file());
+        assert!(plugin_root.join("plugin.py").is_file());
+        assert!(plugin_root.join("plugin.yaml").is_file());
+        assert!(plugin_root.join("agentmesh").join("__init__.py").is_file());
+        assert!(
+            plugin_root
+                .join("agentmesh")
+                .join("hermes_plugin")
+                .join("__init__.py")
+                .is_file()
+        );
+        assert!(
+            hermes_home
+                .path()
+                .join("skills")
+                .join("networking")
+                .join("wildmesh")
+                .join("SKILL.md")
+                .is_file()
+        );
+    }
 }
 
 fn install_launch_agent(home: &Path) -> Result<PathBuf> {
