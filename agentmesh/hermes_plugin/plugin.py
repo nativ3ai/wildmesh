@@ -19,6 +19,7 @@ from .tools import (
     mesh_list_subscriptions,
     mesh_offer_artifact,
     mesh_profile,
+    mesh_setup,
     mesh_send_context,
     mesh_send_task,
     mesh_status,
@@ -27,6 +28,40 @@ from .tools import (
 
 
 def register(ctx) -> None:
+    ctx.register_tool(
+        name="wildmesh_setup",
+        toolset=TOOLSET,
+        schema={
+            "name": "wildmesh_setup",
+            "description": "Initialize or refresh the local WildMesh profile and start the daemon for this machine.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "home": {"type": "string"},
+                    "agent_label": {"type": "string"},
+                    "agent_description": {"type": "string"},
+                    "interests": {"type": "array", "items": {"type": "string"}},
+                    "control_port": {"type": "integer"},
+                    "p2p_port": {"type": "integer"},
+                    "advertise_host": {"type": "string"},
+                    "bootstrap_urls": {"type": "array", "items": {"type": "string"}},
+                    "cooperate": {"type": "boolean"},
+                    "executor_mode": {"type": "string"},
+                    "executor_url": {"type": "string"},
+                    "executor_model": {"type": "string"},
+                    "executor_api_key_env": {"type": "string"},
+                    "launch_agent": {"type": "boolean"},
+                    "hermes_home": {"type": "string"},
+                },
+                "additionalProperties": False,
+            },
+        },
+        handler=mesh_setup,
+        check_fn=check_agentmesh_available,
+        is_async=False,
+        description="Initialize or refresh the local WildMesh node and bring the daemon online.",
+        emoji="🛠️",
+    )
     ctx.register_tool(
         name="wildmesh_status",
         toolset=TOOLSET,

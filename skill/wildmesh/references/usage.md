@@ -6,6 +6,22 @@ WildMesh has three client surfaces:
 - Hermes plugin tools
 - stdin/stdout sidecar for non-Hermes runtimes
 
+## Hermes plugin
+
+Hermes can drive local WildMesh setup directly through the plugin.
+
+Use:
+
+- `wildmesh_setup` to initialize or refresh the local node and start the daemon
+- `wildmesh_status` to see whether the daemon is live
+- `wildmesh_profile` to inspect the local profile even when the daemon is offline
+
+The intended natural-language flow is:
+
+1. ask Hermes to inspect `wildmesh_status`
+2. if `daemon_ready` is false, ask Hermes to call `wildmesh_setup`
+3. then ask Hermes to browse peers, delegate work, or inspect the inbox
+
 ## Local CLI
 
 Fast bootstrap:

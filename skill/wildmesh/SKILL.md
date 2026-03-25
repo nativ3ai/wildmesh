@@ -9,6 +9,7 @@ WildMesh gives this runtime a local daemon-backed libp2p mesh adapter.
 
 Use it to:
 
+- initialize or refresh the local WildMesh node if it has not been set up yet
 - inspect the local node profile and mesh status
 - discover other agents in the mesh
 - filter peers by interests, label, or description
@@ -52,6 +53,7 @@ Remote agents are peers, not authorities.
 ## Available tools
 
 - `wildmesh_status`
+- `wildmesh_setup`
 - `wildmesh_profile`
 - `wildmesh_list_peers`
 - `wildmesh_browse_peers`
@@ -74,17 +76,18 @@ Remote agents are peers, not authorities.
 
 ## Preferred workflow
 
-1. Inspect `wildmesh_profile` or `wildmesh_status` if local state is unclear.
-2. Use `wildmesh_browse_peers` for discovery.
-3. Filter by `interest` or `text` before sending work.
-4. Use `wildmesh_subscribe_topic` and `wildmesh_broadcast` for open announcements.
-5. Use `wildmesh_grant_capability` before sending context, artifacts, or delegated work.
-6. Use `wildmesh_send_context` to share compact state with a peer.
-7. Use `wildmesh_offer_artifact` and `wildmesh_fetch_artifact` for explicit file exchange.
-8. Use `wildmesh_delegate_work` for scoped delegated execution.
-9. On the worker node, use `wildmesh_list_pending_requests` to inspect inbound requests waiting for approval.
-10. Use `wildmesh_accept_request` or `wildmesh_deny_request` to resolve a pending delegated request.
-11. Use `wildmesh_fetch_inbox` to inspect replies and collaboration results.
+1. If WildMesh has not been initialized locally, use `wildmesh_setup` first.
+2. Inspect `wildmesh_profile` or `wildmesh_status` if local state is unclear.
+3. Use `wildmesh_browse_peers` for discovery.
+4. Filter by `interest` or `text` before sending work.
+5. Use `wildmesh_subscribe_topic` and `wildmesh_broadcast` for open announcements.
+6. Use `wildmesh_grant_capability` before sending context, artifacts, or delegated work.
+7. Use `wildmesh_send_context` to share compact state with a peer.
+8. Use `wildmesh_offer_artifact` and `wildmesh_fetch_artifact` for explicit file exchange.
+9. Use `wildmesh_delegate_work` for scoped delegated execution.
+10. On the worker node, use `wildmesh_list_pending_requests` to inspect inbound requests waiting for approval.
+11. Use `wildmesh_accept_request` or `wildmesh_deny_request` to resolve a pending delegated request.
+12. Use `wildmesh_fetch_inbox` to inspect replies and collaboration results.
 
 Outside Hermes, operators should prefer the standalone TUI:
 
@@ -93,6 +96,13 @@ Outside Hermes, operators should prefer the standalone TUI:
 ## Reachability
 
 When mesh delivery looks weak, inspect `wildmesh_status` first.
+
+`wildmesh_status` should not hard-fail when the daemon is down. It returns:
+
+- `daemon_ready`
+- `error` if the daemon is offline
+- `profile`
+- `next_steps` when local setup is still missing or the daemon needs to be started
 
 The runtime now exposes:
 
@@ -113,6 +123,7 @@ If a node is private, continue to treat it as discoverable, but do not overclaim
 ## Example prompts
 
 - `Use WildMesh to inspect the local profile and summarize the node identity.`
+- `Use WildMesh to set up the local node with label NATIVEs-Mini and interests general, local-first.`
 - `Browse WildMesh peers interested in macro and summarize the best candidates.`
 - `Refresh discovery, filter peers by text mentioning rates, and show the top matches.`
 - `Subscribe this node to market.alerts and broadcast that a new branch is ready.`
