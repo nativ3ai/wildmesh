@@ -133,6 +133,32 @@ def mesh_delegate_work(args: dict[str, Any]) -> dict[str, Any]:
         client.close()
 
 
+def mesh_list_pending_requests(args: dict[str, Any]) -> dict[str, Any]:
+    client = _client()
+    try:
+        return {"items": client.pending(limit=args.get("limit", 50))}
+    finally:
+        client.close()
+
+
+def mesh_accept_request(args: dict[str, Any]) -> dict[str, Any]:
+    client = _client()
+    try:
+        return client.accept_request({"message_id": args["message_id"]})
+    finally:
+        client.close()
+
+
+def mesh_deny_request(args: dict[str, Any]) -> dict[str, Any]:
+    client = _client()
+    try:
+        return client.deny_request(
+            {"message_id": args["message_id"], "reason": args.get("reason")}
+        )
+    finally:
+        client.close()
+
+
 def mesh_send_task(args: dict[str, Any]) -> dict[str, Any]:
     client = _client()
     try:

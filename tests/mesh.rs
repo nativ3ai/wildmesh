@@ -2,8 +2,8 @@ use std::path::PathBuf;
 
 use agentmesh::config::AgentMeshConfig;
 use agentmesh::models::{
-    ArtifactFetchRequest, ArtifactOfferRequest, ContextCapsuleRequest, DelegateWorkRequest,
-    MessageKind, MessageStatus, PeerRecord, StoredMessage,
+    ArtifactFetchRequest, ArtifactOfferRequest, ContextCapsuleRequest, DelegateDecisionRequest,
+    DelegateWorkRequest, MessageKind, MessageStatus, PeerRecord, StoredMessage,
 };
 use agentmesh::service::MeshService;
 use agentmesh::storage;
@@ -149,7 +149,12 @@ async fn two_nodes_can_share_context_delegate_and_exchange_artifacts() {
     wait_for("peer discovery", || async {
         let peers_a = service_a.list_peers().await.expect("list peers a");
         let peers_b = service_b.list_peers().await.expect("list peers b");
-        !peers_a.is_empty() && !peers_b.is_empty()
+        peers_a
+            .iter()
+            .any(|peer| peer.agent_label.as_deref() == Some("beta-manual"))
+            && peers_b
+                .iter()
+                .any(|peer| peer.agent_label.as_deref() == Some("alpha-manual"))
     })
     .await;
 
@@ -302,6 +307,144 @@ async fn two_nodes_can_share_context_delegate_and_exchange_artifacts() {
             .expect("artifacts a")
             .iter()
             .any(|artifact| artifact.direction == "incoming")
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn delegated_work_can_wait_for_manual_approval() {
+    let dir = tempdir().expect("tempdir");
+    let home_a = dir.path().join("manual-a");
+    let home_b = dir.path().join("manual-b");
+    let control_port_a = free_port();
+    let control_port_b = free_port();
+    let p2p_port_a = free_port();
+    let p2p_port_b = free_port();
+    let config_a = AgentMeshConfig {
+        control_port: control_port_a,
+        p2p_port: p2p_port_a,
+        advertise_host: "127.0.0.1".to_string(),
+        agent_label: Some("alpha-manual".to_string()),
+        agent_description: Some("delegator".to_string()),
+        interests: vec!["mesh".to_string()],
+        bootstrap_urls: Vec::new(),
+        ..AgentMeshConfig::default()
+    };
+    let config_b = AgentMeshConfig {
+        control_port: control_port_b,
+        p2p_port: p2p_port_b,
+        advertise_host: "127.0.0.1".to_string(),
+        agent_label: Some("beta-manual".to_string()),
+        agent_description: Some("worker".to_string()),
+        interests: vec!["mesh".to_string()],
+        bootstrap_urls: Vec::new(),
+        cooperate_enabled: false,
+        executor_mode: "builtin".to_string(),
+        ..AgentMeshConfig::default()
+    };
+    let service_a = MeshService::bootstrap(&home_a, config_a)
+        .await
+        .expect("bootstrap a");
+    let service_b = MeshService::bootstrap(&home_b, config_b)
+        .await
+        .expect("bootstrap b");
+    service_a
+        .announce_to(Some(("127.0.0.1".to_string(), p2p_port_b)))
+        .await
+        .expect("dial b");
+    service_b
+        .announce_to(Some(("127.0.0.1".to_string(), p2p_port_a)))
+        .await
+        .expect("dial a");
+
+    wait_for("peer discovery", || async {
+        let peers_a = service_a.list_peers().await.expect("list peers a");
+        let peers_b = service_b.list_peers().await.expect("list peers b");
+        !peers_a.is_empty() && !peers_b.is_empty()
+    })
+    .await;
+
+    let peer_b = service_a
+        .list_peers()
+        .await
+        .expect("list peers a")
+        .into_iter()
+        .find(|peer| peer.agent_label.as_deref() == Some("beta-manual"))
+        .expect("beta visible");
+    let peer_a = service_b
+        .list_peers()
+        .await
+        .expect("list peers b")
+        .into_iter()
+        .find(|peer| peer.agent_label.as_deref() == Some("alpha-manual"))
+        .expect("alpha visible");
+
+    service_b
+        .grant(agentmesh::models::CapabilityGrant {
+            peer_id: peer_a.peer_id.clone(),
+            capability: "delegate_work".to_string(),
+            expires_at: None,
+            note: Some("manual delegate".to_string()),
+            created_at: Utc::now(),
+        })
+        .await
+        .expect("grant delegate");
+
+    service_a
+        .delegate_work(DelegateWorkRequest {
+            peer_id: peer_b.peer_id.clone(),
+            capability: None,
+            task_type: "summary".to_string(),
+            instruction: "Summarize this manually approved request".to_string(),
+            input: serde_json::json!({"headline":"manual approval path"}),
+            context: Some(serde_json::json!({"mode":"manual"})),
+            max_output_chars: Some(220),
+        })
+        .await
+        .expect("delegate work");
+
+    wait_for("pending request", || async {
+        service_b
+            .list_pending_delegate_requests(20)
+            .await
+            .expect("pending")
+            .iter()
+            .any(|item| item.peer_id == peer_a.peer_id)
+    })
+    .await;
+
+    assert!(
+        service_a
+            .list_inbox(20)
+            .await
+            .expect("inbox a")
+            .iter()
+            .all(|message| !matches!(message.kind, MessageKind::DelegateResult))
+    );
+
+    let pending = service_b
+        .list_pending_delegate_requests(20)
+        .await
+        .expect("pending list")
+        .into_iter()
+        .find(|item| item.peer_id == peer_a.peer_id)
+        .expect("pending request exists");
+
+    service_b
+        .approve_delegate_request(DelegateDecisionRequest {
+            message_id: pending.message_id,
+            reason: None,
+        })
+        .await
+        .expect("approve pending");
+
+    wait_for("delegate result", || async {
+        service_a
+            .list_inbox(50)
+            .await
+            .expect("inbox a")
+            .iter()
+            .any(|message| matches!(message.kind, MessageKind::DelegateResult))
     })
     .await;
 }

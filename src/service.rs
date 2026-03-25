@@ -12,9 +12,10 @@ use crate::executor;
 use crate::models::{
     ArtifactFetchBody, ArtifactFetchRequest, ArtifactOfferBody, ArtifactOfferRequest,
     ArtifactRecord, BroadcastRequest, BroadcastResponse, CapabilityGrant, CollaborationView,
-    ContextCapsuleBody, ContextCapsuleRequest, CooperateConfigRequest, DelegateRequestBody,
-    DelegateWorkRequest, Envelope, IdentityView, LocalProfile, MessageKind, PeerRecord,
-    SendMessageRequest, SendMessageResponse, StatusResponse, StoredMessage, SubscriptionRecord,
+    ContextCapsuleBody, ContextCapsuleRequest, CooperateConfigRequest, DelegateDecisionRequest,
+    DelegateDecisionResponse, DelegateRequestBody, DelegateWorkRequest, Envelope, IdentityView,
+    LocalProfile, MessageKind, PendingDelegateRequest, PeerRecord, SendMessageRequest,
+    SendMessageResponse, StatusResponse, StoredMessage, SubscriptionRecord,
 };
 use crate::storage::{self, IdentityRow};
 use crate::swarm::{SwarmHandle, spawn_swarm};
@@ -189,6 +190,13 @@ impl MeshService {
         storage::list_messages(&self.pool, crate::models::MessageDirection::Outbound, limit).await
     }
 
+    pub async fn list_pending_delegate_requests(
+        &self,
+        limit: i64,
+    ) -> Result<Vec<PendingDelegateRequest>> {
+        storage::list_pending_delegate_requests(&self.pool, limit).await
+    }
+
     pub async fn list_artifacts(&self) -> Result<Vec<ArtifactRecord>> {
         artifact::list_artifacts(&self.home)
     }
@@ -319,6 +327,22 @@ impl MeshService {
             })?,
         })
         .await
+    }
+
+    pub async fn approve_delegate_request(
+        &self,
+        request: DelegateDecisionRequest,
+    ) -> Result<DelegateDecisionResponse> {
+        self.swarm.approve_delegate_request(request.message_id).await
+    }
+
+    pub async fn deny_delegate_request(
+        &self,
+        request: DelegateDecisionRequest,
+    ) -> Result<DelegateDecisionResponse> {
+        self.swarm
+            .deny_delegate_request(request.message_id, request.reason)
+            .await
     }
 
     pub async fn configure_cooperation(

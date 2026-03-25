@@ -18,7 +18,7 @@ pub async fn execute_delegate(
 }
 
 pub fn delegate_available(config: &AgentMeshConfig) -> bool {
-    config.cooperate_enabled && config.executor_mode != "disabled"
+    config.executor_mode != "disabled"
 }
 
 fn execute_builtin(profile: &LocalProfile, request: &DelegateRequestBody) -> Value {

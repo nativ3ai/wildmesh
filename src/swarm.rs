@@ -31,9 +31,10 @@ use crate::crypto::IdentityMaterial;
 use crate::executor;
 use crate::models::{
     ArtifactFetchBody, ArtifactPayloadBody, BroadcastDelivery, BroadcastRequest, BroadcastResponse,
-    DelegateRequestBody, DelegateResultBody, Envelope, LocalProfile, MeshDirectRequest,
-    MeshDirectResponse, MeshProfileRecord, MeshPubsubMessage, MessageDirection, MessageKind,
-    MessageStatus, PeerRecord, ReachabilityView, SendMessageResponse, StoredMessage,
+    DelegateDecisionResponse, DelegateRequestBody, DelegateResultBody, Envelope, LocalProfile,
+    MeshDirectRequest, MeshDirectResponse, MeshProfileRecord, MeshPubsubMessage,
+    MessageDirection, MessageKind, MessageStatus, PeerRecord, ReachabilityView,
+    SendMessageResponse, StoredMessage,
     SubscriptionRecord,
 };
 use crate::storage;
@@ -72,6 +73,15 @@ pub enum SwarmCommand {
         host: String,
         port: u16,
         respond_to: oneshot::Sender<Result<()>>,
+    },
+    ApproveDelegateRequest {
+        message_id: String,
+        respond_to: oneshot::Sender<Result<DelegateDecisionResponse>>,
+    },
+    DenyDelegateRequest {
+        message_id: String,
+        reason: Option<String>,
+        respond_to: oneshot::Sender<Result<DelegateDecisionResponse>>,
     },
 }
 
@@ -140,6 +150,38 @@ impl SwarmHandle {
             .send(SwarmCommand::DialTarget {
                 host,
                 port,
+                respond_to: tx,
+            })
+            .await
+            .map_err(|_| anyhow!("swarm command channel closed"))?;
+        rx.await.map_err(|_| anyhow!("swarm response dropped"))?
+    }
+
+    pub async fn approve_delegate_request(
+        &self,
+        message_id: String,
+    ) -> Result<DelegateDecisionResponse> {
+        let (tx, rx) = oneshot::channel();
+        self.sender
+            .send(SwarmCommand::ApproveDelegateRequest {
+                message_id,
+                respond_to: tx,
+            })
+            .await
+            .map_err(|_| anyhow!("swarm command channel closed"))?;
+        rx.await.map_err(|_| anyhow!("swarm response dropped"))?
+    }
+
+    pub async fn deny_delegate_request(
+        &self,
+        message_id: String,
+        reason: Option<String>,
+    ) -> Result<DelegateDecisionResponse> {
+        let (tx, rx) = oneshot::channel();
+        self.sender
+            .send(SwarmCommand::DenyDelegateRequest {
+                message_id,
+                reason,
                 respond_to: tx,
             })
             .await
@@ -696,6 +738,21 @@ async fn handle_command(
             let result = dial_target_addr(swarm, &host, port);
             let _ = respond_to.send(result);
         }
+        SwarmCommand::ApproveDelegateRequest {
+            message_id,
+            respond_to,
+        } => {
+            let result = approve_pending_delegate_request(state, &message_id).await;
+            let _ = respond_to.send(result);
+        }
+        SwarmCommand::DenyDelegateRequest {
+            message_id,
+            reason,
+            respond_to,
+        } => {
+            let result = deny_pending_delegate_request(state, &message_id, reason.as_deref()).await;
+            let _ = respond_to.send(result);
+        }
     }
 }
 
@@ -899,12 +956,7 @@ async fn handle_direct_request(
             state
                 .known_transport_by_app
                 .insert(envelope.sender_peer_id.clone(), *transport_peer);
-            let response = accept_inbound_envelope(
-                &state.pool,
-                &state.identity.app_identity,
-                envelope.clone(),
-            )
-            .await?;
+            let response = accept_inbound_envelope(state, envelope.clone()).await?;
             maybe_handle_collaboration(state, envelope, response.stored_message).await;
             Ok(MeshDirectResponse::Ack {
                 delivery_status: response.delivery_status,
@@ -1285,11 +1337,10 @@ struct InboundAcceptOutcome {
 }
 
 async fn accept_inbound_envelope(
-    pool: &SqlitePool,
-    identity: &IdentityMaterial,
+    state: &RuntimeState,
     envelope: Envelope,
 ) -> Result<InboundAcceptOutcome> {
-    if storage::message_exists(pool, &envelope.id).await? {
+    if storage::message_exists(&state.pool, &envelope.id).await? {
         let raw_envelope = serde_json::to_value(&envelope)?;
         return Ok(InboundAcceptOutcome {
             delivery_status: "delivered".to_string(),
@@ -1313,7 +1364,7 @@ async fn accept_inbound_envelope(
     if derived_sender != envelope.sender_peer_id {
         bail!("sender peer_id does not match sender public key");
     }
-    if envelope.recipient_peer_id != identity.peer_id() {
+    if envelope.recipient_peer_id != state.identity.app_identity.peer_id() {
         bail!("envelope addressed to another peer");
     }
     let unsigned = Envelope {
@@ -1328,7 +1379,7 @@ async fn accept_inbound_envelope(
             .ok_or_else(|| anyhow!("missing signature"))?,
         &unsigned,
     )?;
-    let body_bytes = identity.decrypt(
+    let body_bytes = state.identity.app_identity.decrypt(
         &envelope.body_ciphertext,
         &envelope.body_nonce,
         &envelope.body_ephemeral_public_key,
@@ -1339,7 +1390,7 @@ async fn accept_inbound_envelope(
     }
     let body: Value = serde_json::from_slice(&body_bytes)?;
     let grant_allowed = storage::has_grant(
-        pool,
+        &state.pool,
         &envelope.sender_peer_id,
         envelope.capability.as_deref(),
     )
@@ -1347,17 +1398,28 @@ async fn accept_inbound_envelope(
     let allowed = match envelope.kind {
         MessageKind::Hello | MessageKind::Broadcast | MessageKind::PeerExchange => true,
         MessageKind::TaskResult | MessageKind::DelegateResult | MessageKind::ArtifactPayload => {
-            matches_reply_context(pool, &envelope.sender_peer_id, &body).await? || grant_allowed
+            matches_reply_context(&state.pool, &envelope.sender_peer_id, &body).await? || grant_allowed
         }
         _ => grant_allowed,
     };
-    let reason = if allowed {
-        None
+    let auto_delegate = state.config.cooperate_enabled && executor::delegate_available(&state.config);
+    let (status, reason, delivery_status) = if !allowed {
+        (
+            MessageStatus::Blocked,
+            Some(format!(
+                "missing local capability grant for {}",
+                envelope.capability.as_deref().unwrap_or("<none>")
+            )),
+            "blocked".to_string(),
+        )
+    } else if matches!(envelope.kind, MessageKind::DelegateRequest) && !auto_delegate {
+        (
+            MessageStatus::Pending,
+            Some("pending local approval".to_string()),
+            "pending".to_string(),
+        )
     } else {
-        Some(format!(
-            "missing local capability grant for {}",
-            envelope.capability.as_deref().unwrap_or("<none>")
-        ))
+        (MessageStatus::Received, Some("accepted".to_string()), "delivered".to_string())
     };
     let stored_message = StoredMessage {
         id: envelope.id.clone(),
@@ -1366,24 +1428,16 @@ async fn accept_inbound_envelope(
         kind: envelope.kind.clone(),
         capability: envelope.capability.clone(),
         body,
-        status: if allowed {
-            MessageStatus::Received
-        } else {
-            MessageStatus::Blocked
-        },
+        status,
         allowed,
         reason: reason.clone(),
         created_at: envelope.issued_at,
         raw_envelope: serde_json::to_value(&envelope)?,
     };
-    storage::save_message(pool, &stored_message).await?;
+    storage::save_message(&state.pool, &stored_message).await?;
     Ok(InboundAcceptOutcome {
-        delivery_status: if allowed {
-            "delivered".to_string()
-        } else {
-            "blocked".to_string()
-        },
-        reason: Some(reason.unwrap_or_else(|| "accepted".to_string())),
+        delivery_status,
+        reason,
         stored_message,
     })
 }
@@ -1432,10 +1486,17 @@ async fn maybe_handle_collaboration(
             }
         }
         MessageKind::DelegateRequest => {
+            if !matches!(stored_message.status, MessageStatus::Received) {
+                return;
+            }
             if let Ok(request) =
                 serde_json::from_value::<DelegateRequestBody>(stored_message.body.clone())
             {
-                maybe_execute_delegate(state, &stored_message.peer_id, &envelope.id, request).await;
+                if let Err(err) =
+                    execute_delegate_and_queue_result(state, &stored_message.peer_id, &envelope.id, request).await
+                {
+                    warn!(target: "agentmesh", error = %err, peer_id = %stored_message.peer_id, "delegate execution failed");
+                }
             }
         }
         _ => {}
@@ -1488,14 +1549,14 @@ async fn maybe_reply_with_artifact(
     }
 }
 
-async fn maybe_execute_delegate(
+async fn execute_delegate_and_queue_result(
     state: &RuntimeState,
     peer_id: &str,
     reply_to_message_id: &str,
     request: DelegateRequestBody,
-) {
+) -> Result<()> {
     if !executor::delegate_available(&state.config) {
-        return;
+        bail!("local executor is not enabled");
     }
     let profile = LocalProfile {
         peer_id: state.identity.app_identity.peer_id(),
@@ -1526,39 +1587,132 @@ async fn maybe_execute_delegate(
             accepts_delegate_work: executor::delegate_available(&state.config),
         },
     };
-    match executor::execute_delegate(&state.config, &profile, &request).await {
-        Ok(output) => {
-            let summary = output
-                .get("summary")
-                .and_then(Value::as_str)
-                .map(ToString::to_string);
-            let payload = DelegateResultBody {
-                task_id: request.task_id,
-                task_type: request.task_type,
-                status: "completed".to_string(),
-                handled_by: profile
-                    .agent_label
-                    .clone()
-                    .unwrap_or_else(|| profile.peer_id.clone()),
-                output,
-                summary,
-                reply_to_message_id: Some(reply_to_message_id.to_string()),
-            };
-            let _ = state
-                .command_sender
-                .send(SwarmCommand::SendLocalMessage {
-                    peer_id: peer_id.to_string(),
-                    kind: MessageKind::DelegateResult,
-                    capability: Some("delegate_work".to_string()),
-                    body: serde_json::to_value(payload).unwrap_or_else(|_| json!({})),
-                    respond_to: None,
-                })
-                .await;
-        }
-        Err(err) => {
-            warn!(target: "agentmesh", error = %err, peer_id = %peer_id, "delegate execution failed")
-        }
+    let output = executor::execute_delegate(&state.config, &profile, &request).await?;
+    let summary = output
+        .get("summary")
+        .and_then(Value::as_str)
+        .map(ToString::to_string);
+    let payload = DelegateResultBody {
+        task_id: request.task_id,
+        task_type: request.task_type,
+        status: "completed".to_string(),
+        handled_by: profile
+            .agent_label
+            .clone()
+            .unwrap_or_else(|| profile.peer_id.clone()),
+        output,
+        summary,
+        reply_to_message_id: Some(reply_to_message_id.to_string()),
+    };
+    state
+        .command_sender
+        .try_send(SwarmCommand::SendLocalMessage {
+            peer_id: peer_id.to_string(),
+            kind: MessageKind::DelegateResult,
+            capability: Some("delegate_work".to_string()),
+            body: serde_json::to_value(payload).unwrap_or_else(|_| json!({})),
+            respond_to: None,
+        })
+        .map_err(|_| anyhow!("delegate result queue is full"))?;
+    Ok(())
+}
+
+async fn queue_delegate_denial(
+    state: &RuntimeState,
+    peer_id: &str,
+    reply_to_message_id: &str,
+    request: &DelegateRequestBody,
+    reason: &str,
+) -> Result<()> {
+    let payload = DelegateResultBody {
+        task_id: request.task_id.clone(),
+        task_type: request.task_type.clone(),
+        status: "denied".to_string(),
+        handled_by: state
+            .config
+            .agent_label
+            .clone()
+            .unwrap_or_else(|| state.identity.app_identity.peer_id()),
+        output: json!({ "reason": reason }),
+        summary: Some(reason.to_string()),
+        reply_to_message_id: Some(reply_to_message_id.to_string()),
+    };
+    state
+        .command_sender
+        .try_send(SwarmCommand::SendLocalMessage {
+            peer_id: peer_id.to_string(),
+            kind: MessageKind::DelegateResult,
+            capability: Some("delegate_work".to_string()),
+            body: serde_json::to_value(payload).unwrap_or_else(|_| json!({})),
+            respond_to: None,
+        })
+        .map_err(|_| anyhow!("delegate denial queue is full"))?;
+    Ok(())
+}
+
+async fn approve_pending_delegate_request(
+    state: &RuntimeState,
+    message_id: &str,
+) -> Result<DelegateDecisionResponse> {
+    let stored = storage::get_message(&state.pool, message_id)
+        .await?
+        .ok_or_else(|| anyhow!("pending request not found: {message_id}"))?;
+    if !matches!(stored.direction, MessageDirection::Inbound)
+        || !matches!(stored.kind, MessageKind::DelegateRequest)
+    {
+        bail!("message is not an inbound delegate request");
     }
+    if !matches!(stored.status, MessageStatus::Pending) {
+        bail!("delegate request is not pending approval");
+    }
+    let request = serde_json::from_value::<DelegateRequestBody>(stored.body.clone())?;
+    execute_delegate_and_queue_result(state, &stored.peer_id, &stored.id, request).await?;
+    storage::update_message_status(
+        &state.pool,
+        &stored.id,
+        MessageStatus::Approved,
+        Some("approved for local execution"),
+    )
+    .await?;
+    Ok(DelegateDecisionResponse {
+        message_id: stored.id,
+        peer_id: stored.peer_id,
+        action: "accept".to_string(),
+        status: "approved".to_string(),
+        reply_message_id: None,
+        reason: Some("delegate request approved".to_string()),
+    })
+}
+
+async fn deny_pending_delegate_request(
+    state: &RuntimeState,
+    message_id: &str,
+    reason: Option<&str>,
+) -> Result<DelegateDecisionResponse> {
+    let stored = storage::get_message(&state.pool, message_id)
+        .await?
+        .ok_or_else(|| anyhow!("pending request not found: {message_id}"))?;
+    if !matches!(stored.direction, MessageDirection::Inbound)
+        || !matches!(stored.kind, MessageKind::DelegateRequest)
+    {
+        bail!("message is not an inbound delegate request");
+    }
+    if !matches!(stored.status, MessageStatus::Pending) {
+        bail!("delegate request is not pending approval");
+    }
+    let request = serde_json::from_value::<DelegateRequestBody>(stored.body.clone())?;
+    let reason = reason.unwrap_or("denied by local operator");
+    queue_delegate_denial(state, &stored.peer_id, &stored.id, &request, reason).await?;
+    storage::update_message_status(&state.pool, &stored.id, MessageStatus::Denied, Some(reason))
+        .await?;
+    Ok(DelegateDecisionResponse {
+        message_id: stored.id,
+        peer_id: stored.peer_id,
+        action: "deny".to_string(),
+        status: "denied".to_string(),
+        reply_message_id: None,
+        reason: Some(reason.to_string()),
+    })
 }
 
 fn build_envelope_from_state(

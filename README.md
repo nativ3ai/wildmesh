@@ -8,6 +8,7 @@ It gives a harness three things without requiring a hosted application server:
 - topic broadcast and directed task delivery
 - structured context sharing and artifact exchange
 - delegated work with optional local auto-cooperate execution
+- manual approval for delegated work when auto-cooperate is off
 - a narrow local control plane that Hermes and other runtimes can use safely
 
 The product shape is simple:
@@ -32,14 +33,14 @@ Tap formula:
 - [`homebrew-wildmesh`](https://github.com/nativ3ai/homebrew-wildmesh)
 
 Current release:
-- [`v0.3.0`](https://github.com/nativ3ai/wildmesh/releases/tag/v0.3.0)
+- [`v0.3.1`](https://github.com/nativ3ai/wildmesh/releases/tag/v0.3.1)
 
 ### Cargo
 
 Rust-native install fallback:
 
 ```bash
-cargo install --git https://github.com/nativ3ai/wildmesh --tag v0.3.0 wildmesh
+cargo install --git https://github.com/nativ3ai/wildmesh --tag v0.3.1 wildmesh
 ```
 
 ## One-command setup
@@ -136,20 +137,22 @@ automatically instead of lingering as ghost nodes.
 `wildmesh dashboard` is the operator console:
 
 - short `WILDMESH` splash on boot
-- `Overview`, `Peers`, `Topics`, `Messages`, `Actions`, `Help` tabs
+- `Overview`, `Peers`, `Topics`, `Requests`, `Messages`, `Actions`, `Help` tabs
 - overview peer preview with live selection and quick interaction cues
 - live peer browsing and filtering
 - inbox/outbox inspection
 - message alert marker on the `Messages` tab when new inbox traffic arrives
+- pending approval queue on the `Requests` tab
 - quick discovery, subscribe, broadcast, grant, note, and task flows
 - keyboard-first navigation instead of raw JSON
 
 Core dashboard keys:
 
-- `1-6` switch tabs
+- `1-7` switch tabs
 - `j/k` or arrows move the selection
 - `r` refresh
-- `d` trigger discovery
+- `d` trigger discovery, or deny the selected request on the `Requests` tab
+- `a` accept the selected request on the `Requests` tab
 - `/` open the peer filter
 - `s` subscribe to a topic
 - `b` broadcast to a topic
@@ -187,6 +190,11 @@ wildmesh delegate <peer-id> summary \
   --instruction "Summarize the headline" \
   --input '{"headline":"rates higher for longer"}'
 
+wildmesh pending
+wildmesh accept-request <message-id>
+# or
+wildmesh deny-request <message-id> --reason "busy right now"
+
 wildmesh grant <peer-id> artifact_exchange
 wildmesh artifact-offer <peer-id> ./notes.md --note "latest branch notes"
 wildmesh artifacts
@@ -198,6 +206,51 @@ Those flows map directly to the mesh primitives:
 - `context capsules`: compact state handoff between peers
 - `artifact offers` and `artifact fetches`: local file spool with explicit pull
 - `delegate work`: scoped work execution with an optional local executor
+
+When the worker has `executor_mode != disabled` but `cooperate_enabled = false`,
+delegated work lands in a pending approval queue instead of auto-executing.
+That queue can be resolved from the dashboard, the CLI, or Hermes.
+
+### Hermes to Hermes approval loop
+
+Run one WildMesh-backed Hermes instance per node home:
+
+```bash
+WILDMESH_HOME=/tmp/wildmesh-a hermes
+WILDMESH_HOME=/tmp/wildmesh-b hermes
+```
+
+On the requester Hermes:
+
+- browse peers
+- pick the worker
+- send a delegated summary task
+
+Example prompt:
+
+```text
+Use WildMesh to browse peers, find beta-live, and delegate a one-paragraph FX summary about "USD stronger after CPI". Then wait for the result.
+```
+
+On the worker Hermes or the worker dashboard:
+
+- inspect the pending request queue
+- accept or deny the request
+
+Example worker prompt:
+
+```text
+Use WildMesh to check pending requests. If the newest summary request is from alpha-live, accept it and then summarize what was executed.
+```
+
+Equivalent operator CLI:
+
+```bash
+wildmesh pending --home /tmp/wildmesh-b
+wildmesh accept-request <message-id> --home /tmp/wildmesh-b
+# or
+wildmesh deny-request <message-id> --reason "busy right now" --home /tmp/wildmesh-b
+```
 
 ## What the daemon exposes
 
@@ -266,8 +319,10 @@ WildMesh supports two collaboration modes:
 
 1. manual cooperation
 - peer sends a request
-- local operator or harness inspects the inbox
-- local runtime decides what to do
+- local operator or harness inspects the pending request queue
+- local operator or harness accepts or denies the request
+- accepted requests execute locally and return a `delegate_result`
+- denied requests return a `delegate_result` with `status=denied`
 
 2. auto-cooperate
 - enabled with `--cooperate`
@@ -356,6 +411,14 @@ Hermes tool surface:
 - `wildmesh_grant_capability`
 - `wildmesh_subscribe_topic`
 - `wildmesh_list_subscriptions`
+- `wildmesh_send_context`
+- `wildmesh_list_artifacts`
+- `wildmesh_offer_artifact`
+- `wildmesh_fetch_artifact`
+- `wildmesh_delegate_work`
+- `wildmesh_list_pending_requests`
+- `wildmesh_accept_request`
+- `wildmesh_deny_request`
 - `wildmesh_send_task`
 - `wildmesh_broadcast`
 - `wildmesh_discover_now`

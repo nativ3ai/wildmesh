@@ -7,7 +7,7 @@ use std::str::FromStr;
 
 use crate::models::{
     CapabilityGrant, Envelope, HubAnnouncement, HubPeerRecord, MessageDirection, MessageKind,
-    MessageStatus, PeerRecord, StoredMessage, SubscriptionRecord,
+    MessageStatus, PendingDelegateRequest, PeerRecord, StoredMessage, SubscriptionRecord,
 };
 
 pub async fn open_pool(db_path: &Path) -> Result<SqlitePool> {
@@ -428,6 +428,29 @@ pub async fn save_message(pool: &SqlitePool, message: &StoredMessage) -> Result<
     Ok(())
 }
 
+pub async fn get_message(pool: &SqlitePool, message_id: &str) -> Result<Option<StoredMessage>> {
+    let row = sqlx::query("SELECT * FROM messages WHERE id = ?")
+        .bind(message_id)
+        .fetch_optional(pool)
+        .await?;
+    row.map(|row| row_to_message(&row)).transpose()
+}
+
+pub async fn update_message_status(
+    pool: &SqlitePool,
+    message_id: &str,
+    status: MessageStatus,
+    reason: Option<&str>,
+) -> Result<()> {
+    sqlx::query("UPDATE messages SET status = ?, reason = ? WHERE id = ?")
+        .bind(status_to_str(&status))
+        .bind(reason)
+        .bind(message_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 pub async fn list_messages(
     pool: &SqlitePool,
     direction: MessageDirection,
@@ -440,6 +463,57 @@ pub async fn list_messages(
             .fetch_all(pool)
             .await?;
     rows.iter().map(row_to_message).collect()
+}
+
+pub async fn list_pending_delegate_requests(
+    pool: &SqlitePool,
+    limit: i64,
+) -> Result<Vec<PendingDelegateRequest>> {
+    let rows = sqlx::query(
+        r#"
+        SELECT
+            m.id,
+            m.peer_id,
+            m.capability,
+            m.body_json,
+            m.created_at,
+            p.label,
+            p.agent_label,
+            p.agent_description
+        FROM messages m
+        LEFT JOIN peers p ON p.peer_id = m.peer_id
+        WHERE m.direction = 'inbound'
+          AND m.kind = 'delegate_request'
+          AND m.status = 'pending'
+        ORDER BY m.created_at DESC
+        LIMIT ?
+        "#,
+    )
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    rows.into_iter()
+        .map(|row| {
+            let body = serde_json::from_str::<crate::models::DelegateRequestBody>(
+                &row.get::<String, _>("body_json"),
+            )?;
+            Ok(PendingDelegateRequest {
+                message_id: row.get("id"),
+                peer_id: row.get("peer_id"),
+                peer_label: row.get("label"),
+                peer_agent_label: row.get("agent_label"),
+                peer_agent_description: row.get("agent_description"),
+                task_id: body.task_id,
+                task_type: body.task_type,
+                instruction: body.instruction,
+                input: body.input,
+                context: body.context,
+                max_output_chars: body.max_output_chars,
+                capability: row.get("capability"),
+                created_at: parse_datetime(&row.get::<String, _>("created_at"))?,
+            })
+        })
+        .collect()
 }
 
 pub async fn counts(pool: &SqlitePool) -> Result<(i64, i64, i64, i64, i64)> {
@@ -703,6 +777,9 @@ fn direction_to_str(value: &MessageDirection) -> &'static str {
 fn status_to_str(value: &MessageStatus) -> &'static str {
     match value {
         MessageStatus::Received => "received",
+        MessageStatus::Pending => "pending",
+        MessageStatus::Approved => "approved",
+        MessageStatus::Denied => "denied",
         MessageStatus::Blocked => "blocked",
         MessageStatus::Queued => "queued",
         MessageStatus::Delivered => "delivered",
@@ -738,9 +815,13 @@ fn str_to_direction(value: &str) -> MessageDirection {
 fn str_to_status(value: &str) -> MessageStatus {
     match value {
         "received" => MessageStatus::Received,
+        "pending" => MessageStatus::Pending,
+        "approved" => MessageStatus::Approved,
+        "denied" => MessageStatus::Denied,
         "blocked" => MessageStatus::Blocked,
         "queued" => MessageStatus::Queued,
         "delivered" => MessageStatus::Delivered,
+        "failed" => MessageStatus::Failed,
         _ => MessageStatus::Failed,
     }
 }

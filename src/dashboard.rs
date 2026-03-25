@@ -26,7 +26,8 @@ use serde_json::{Value, json};
 
 use crate::config::AgentMeshConfig;
 use crate::models::{
-    CapabilityGrant, MessageKind, PeerRecord, StatusResponse, StoredMessage, SubscriptionRecord,
+    CapabilityGrant, MessageKind, PendingDelegateRequest, PeerRecord, StatusResponse,
+    StoredMessage, SubscriptionRecord,
 };
 
 const REFRESH_INTERVAL: Duration = Duration::from_secs(3);
@@ -46,17 +47,19 @@ enum TabPage {
     Overview,
     Peers,
     Topics,
+    Requests,
     Messages,
     Actions,
     Help,
 }
 
 impl TabPage {
-    fn all() -> [Self; 6] {
+    fn all() -> [Self; 7] {
         [
             Self::Overview,
             Self::Peers,
             Self::Topics,
+            Self::Requests,
             Self::Messages,
             Self::Actions,
             Self::Help,
@@ -68,6 +71,7 @@ impl TabPage {
             Self::Overview => "OVERVIEW",
             Self::Peers => "PEERS",
             Self::Topics => "TOPICS",
+            Self::Requests => "REQUESTS",
             Self::Messages => "MESSAGES",
             Self::Actions => "ACTIONS",
             Self::Help => "HELP",
@@ -161,6 +165,7 @@ enum ModalKind {
     GrantCapability { peer_id: String },
     SendNote { peer_id: String },
     SendSummaryTask { peer_id: String },
+    DenyRequest { message_id: String },
 }
 
 #[derive(Debug, Clone)]
@@ -217,6 +222,7 @@ struct DashboardSnapshot {
     peers: Vec<PeerRecord>,
     grants: Vec<CapabilityGrant>,
     subscriptions: Vec<SubscriptionRecord>,
+    pending: Vec<PendingDelegateRequest>,
     inbox: Vec<StoredMessage>,
     outbox: Vec<StoredMessage>,
 }
@@ -265,6 +271,7 @@ impl DashboardClient {
             peers: self.get("/v1/peers").unwrap_or_default(),
             grants: self.get("/v1/capabilities").unwrap_or_default(),
             subscriptions: self.get("/v1/subscriptions").unwrap_or_default(),
+            pending: self.get("/v1/delegate/pending?limit=50").unwrap_or_default(),
             inbox: self.get("/v1/messages/inbox?limit=50").unwrap_or_default(),
             outbox: self.get("/v1/messages/outbox?limit=50").unwrap_or_default(),
         })
@@ -309,6 +316,7 @@ struct DashboardApp {
     client: DashboardClient,
     tab: usize,
     peer_index: usize,
+    request_index: usize,
     message_index: usize,
     action_index: usize,
     message_pane: MessagePane,
@@ -349,6 +357,7 @@ impl DashboardApp {
             client,
             tab: 0,
             peer_index: 0,
+            request_index: 0,
             message_index: 0,
             action_index: 0,
             message_pane: MessagePane::Inbox,
@@ -376,6 +385,10 @@ impl DashboardApp {
 
     fn selected_peer(&self) -> Option<&PeerRecord> {
         self.filtered_peers().get(self.peer_index).copied()
+    }
+
+    fn selected_request(&self) -> Option<&PendingDelegateRequest> {
+        self.snapshot.pending.get(self.request_index)
     }
 
     fn filtered_peers(&self) -> Vec<&PeerRecord> {
@@ -607,6 +620,12 @@ impl DashboardApp {
         } else {
             self.message_index = self.message_index.min(message_len.saturating_sub(1));
         }
+        let request_len = self.snapshot.pending.len();
+        if request_len == 0 {
+            self.request_index = 0;
+        } else {
+            self.request_index = self.request_index.min(request_len.saturating_sub(1));
+        }
         self.action_index = self
             .action_index
             .min(self.action_items().len().saturating_sub(1));
@@ -688,6 +707,42 @@ impl DashboardApp {
         }
     }
 
+    fn open_deny_request(&mut self) {
+        if let Some(request) = self.selected_request() {
+            self.open_modal(ModalState::new(
+                ModalKind::DenyRequest {
+                    message_id: request.message_id.clone(),
+                },
+                "DENY REQUEST",
+                &format!("Deny task {} from {}", request.task_type, short_peer(&request.peer_id)),
+                "denied by local operator",
+            ));
+        } else {
+            self.show_toast("select a pending request first", Color::Yellow);
+        }
+    }
+
+    fn accept_request(&mut self) {
+        let Some(request) = self.selected_request() else {
+            self.show_toast("select a pending request first", Color::Yellow);
+            return;
+        };
+        let payload = json!({ "message_id": request.message_id });
+        match self
+            .client
+            .post::<Value>("/v1/delegate/accept", &payload)
+        {
+            Ok(_) => {
+                self.refresh();
+                self.show_toast("request approved", Color::Green);
+            }
+            Err(err) => {
+                self.last_error = Some(err.to_string());
+                self.show_toast("approval failed", Color::Red);
+            }
+        }
+    }
+
     fn submit_modal(&mut self) {
         let Some(modal) = self.modal.clone() else {
             return;
@@ -751,6 +806,23 @@ impl DashboardApp {
                 } else {
                     self.send_summary_task(&peer_id, &value);
                     self.modal = None;
+                }
+            }
+            ModalKind::DenyRequest { message_id } => {
+                let payload = json!({
+                    "message_id": message_id,
+                    "reason": if value.is_empty() { Value::Null } else { Value::String(value.clone()) },
+                });
+                match self.client.post::<Value>("/v1/delegate/deny", &payload) {
+                    Ok(_) => {
+                        self.refresh();
+                        self.show_toast("request denied", Color::Yellow);
+                        self.modal = None;
+                    }
+                    Err(err) => {
+                        self.last_error = Some(err.to_string());
+                        self.show_toast("deny failed", Color::Red);
+                    }
                 }
             }
         }
@@ -851,7 +923,8 @@ pub fn run(home: Option<PathBuf>) -> Result<()> {
             KeyCode::Char('3') => app.select_tab(2),
             KeyCode::Char('4') => app.select_tab(3),
             KeyCode::Char('5') => app.select_tab(4),
-            KeyCode::Char('6') | KeyCode::Char('?') => app.select_tab(5),
+            KeyCode::Char('6') => app.select_tab(5),
+            KeyCode::Char('7') | KeyCode::Char('?') => app.select_tab(6),
             KeyCode::Tab => app.select_tab((app.tab + 1) % TabPage::all().len()),
             KeyCode::BackTab => {
                 let next = if app.tab == 0 {
@@ -862,6 +935,8 @@ pub fn run(home: Option<PathBuf>) -> Result<()> {
                 app.select_tab(next);
             }
             KeyCode::Char('r') => app.refresh(),
+            KeyCode::Char('a') if app.current_tab() == TabPage::Requests => app.accept_request(),
+            KeyCode::Char('d') if app.current_tab() == TabPage::Requests => app.open_deny_request(),
             KeyCode::Char('d') => app.discover_now(),
             KeyCode::Char('/') => app.open_peer_filter(),
             KeyCode::Char('s') => app.open_subscribe(),
@@ -888,6 +963,12 @@ pub fn run(home: Option<PathBuf>) -> Result<()> {
                         app.message_index = (app.message_index + 1).min(len - 1);
                     }
                 }
+                TabPage::Requests => {
+                    let len = app.snapshot.pending.len();
+                    if len > 0 {
+                        app.request_index = (app.request_index + 1).min(len - 1);
+                    }
+                }
                 TabPage::Actions => {
                     let len = app.action_items().len();
                     app.action_index = (app.action_index + 1).min(len - 1);
@@ -900,6 +981,9 @@ pub fn run(home: Option<PathBuf>) -> Result<()> {
                 }
                 TabPage::Messages => {
                     app.message_index = app.message_index.saturating_sub(1);
+                }
+                TabPage::Requests => {
+                    app.request_index = app.request_index.saturating_sub(1);
                 }
                 TabPage::Actions => {
                     app.action_index = app.action_index.saturating_sub(1);
@@ -963,6 +1047,7 @@ fn render_dashboard(frame: &mut Frame, app: &DashboardApp) {
         TabPage::Overview => render_overview(frame, root[1], app),
         TabPage::Peers => render_peers(frame, root[1], app),
         TabPage::Topics => render_topics(frame, root[1], app),
+        TabPage::Requests => render_requests(frame, root[1], app),
         TabPage::Messages => render_messages(frame, root[1], app),
         TabPage::Actions => render_actions(frame, root[1], app),
         TabPage::Help => render_help(frame, root[1], app),
@@ -1013,6 +1098,9 @@ fn render_header(frame: &mut Frame, area: Rect, app: &DashboardApp) {
         .into_iter()
         .map(|tab| {
             let mut title = tab.title().to_string();
+            if tab == TabPage::Requests && !app.snapshot.pending.is_empty() {
+                title.push_str(" !");
+            }
             if tab == TabPage::Messages && app.has_unread_inbox() {
                 title.push_str(" *");
             }
@@ -1169,6 +1257,7 @@ fn render_overview(frame: &mut Frame, area: Rect, app: &DashboardApp) {
             20,
             Color::LightMagenta,
         ),
+        gauge_line("PENDING", app.snapshot.pending.len() as u16, 20, Color::LightRed),
         gauge_line("INBOX", app.snapshot.inbox.len() as u16, 50, Color::Green),
         gauge_line("UNREAD", app.unread_inbox_count() as u16, 20, Color::Red),
         gauge_line(
@@ -1180,7 +1269,7 @@ fn render_overview(frame: &mut Frame, area: Rect, app: &DashboardApp) {
     ];
     let counts_layout = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(3); 5])
+        .constraints([Constraint::Length(3); 6])
         .split(left[2]);
     for (idx, gauge) in counts.into_iter().enumerate() {
         frame.render_widget(gauge, counts_layout[idx]);
@@ -1297,6 +1386,7 @@ fn render_overview(frame: &mut Frame, area: Rect, app: &DashboardApp) {
             Line::from("1. press d to refresh discovery"),
             Line::from("2. use j/k to inspect peer preview"),
             Line::from("3. use g, n, or t to interact"),
+            Line::from("4. review REQUESTS to approve or deny delegated work"),
             Line::from(""),
             Line::from(Span::styled("WILDERNESS RULES", neon(Color::LightMagenta))),
             Line::from("discovery is open; authority stays local"),
@@ -1339,6 +1429,18 @@ fn render_overview(frame: &mut Frame, area: Rect, app: &DashboardApp) {
                     neon(Color::Red)
                 } else {
                     neon(Color::LightGreen)
+                },
+            )),
+            Line::from(Span::styled(
+                if app.snapshot.pending.is_empty() {
+                    "PENDING REQUESTS none".to_string()
+                } else {
+                    format!("PENDING REQUESTS ! {}", app.snapshot.pending.len())
+                },
+                if app.snapshot.pending.is_empty() {
+                    neon(Color::LightGreen)
+                } else {
+                    neon(Color::LightRed)
                 },
             )),
         ];
@@ -1574,6 +1676,122 @@ fn render_topics(frame: &mut Frame, area: Rect, app: &DashboardApp) {
     );
 }
 
+fn render_requests(frame: &mut Frame, area: Rect, app: &DashboardApp) {
+    let layout = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
+        .split(area);
+    let items = if app.snapshot.pending.is_empty() {
+        vec![ListItem::new("No pending delegate requests.")]
+    } else {
+        app.snapshot
+            .pending
+            .iter()
+            .map(|item| {
+                let who = item
+                    .peer_agent_label
+                    .clone()
+                    .or_else(|| item.peer_label.clone())
+                    .unwrap_or_else(|| short_peer(&item.peer_id));
+                let line1 = format!("{}  {}", who, item.task_type);
+                let line2 = format!(
+                    "{}  {}",
+                    short_peer(&item.peer_id),
+                    format_timestamp(item.created_at)
+                );
+                ListItem::new(vec![
+                    Line::from(Span::styled(line1, Style::default().fg(Color::White))),
+                    Line::from(Span::styled(line2, Style::default().fg(Color::DarkGray))),
+                ])
+            })
+            .collect()
+    };
+    let mut state = ListState::default();
+    if !app.snapshot.pending.is_empty() {
+        state.select(Some(app.request_index));
+    }
+    frame.render_stateful_widget(
+        List::new(items)
+            .block(block(&format!("PENDING [{}]", app.snapshot.pending.len())))
+            .highlight_style(
+                Style::default()
+                    .bg(Color::LightRed)
+                    .fg(Color::Black)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .highlight_symbol(">> "),
+        layout[0],
+        &mut state,
+    );
+
+    let detail = if let Some(request) = app.selected_request() {
+        let input = serde_json::to_string_pretty(&request.input)
+            .unwrap_or_else(|_| "<input decode failed>".to_string());
+        let context = request
+            .context
+            .as_ref()
+            .map(|value| serde_json::to_string_pretty(value).unwrap_or_else(|_| "<context decode failed>".to_string()))
+            .unwrap_or_else(|| "null".to_string());
+        let mut lines = vec![
+            Line::from(Span::styled("REQUEST DETAIL", neon(Color::Cyan))),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("from   ", neon(Color::LightGreen)),
+                Span::raw(
+                    request
+                        .peer_agent_label
+                        .clone()
+                        .or_else(|| request.peer_label.clone())
+                        .unwrap_or_else(|| short_peer(&request.peer_id)),
+                ),
+            ]),
+            Line::from(vec![
+                Span::styled("peer   ", neon(Color::LightGreen)),
+                Span::raw(request.peer_id.clone()),
+            ]),
+            Line::from(vec![
+                Span::styled("task   ", neon(Color::LightGreen)),
+                Span::raw(request.task_type.clone()),
+            ]),
+            Line::from(vec![
+                Span::styled("cap    ", neon(Color::LightGreen)),
+                Span::raw(request.capability.clone().unwrap_or_else(|| "<none>".to_string())),
+            ]),
+            Line::from(vec![
+                Span::styled("time   ", neon(Color::LightGreen)),
+                Span::raw(format_timestamp(request.created_at)),
+            ]),
+            Line::from(""),
+            Line::from(Span::styled("INSTRUCTION", neon(Color::Yellow))),
+            Line::from(request.instruction.clone()),
+            Line::from(""),
+            Line::from(Span::styled("INPUT", neon(Color::LightMagenta))),
+        ];
+        for line in input.lines() {
+            lines.push(Line::from(line.to_string()));
+        }
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled("CONTEXT", neon(Color::LightMagenta))));
+        for line in context.lines() {
+            lines.push(Line::from(line.to_string()));
+        }
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "a accept   d deny   j/k move",
+            neon(Color::Cyan),
+        )));
+        Text::from(lines)
+    } else {
+        Text::from("No pending request selected.")
+    };
+    frame.render_widget(
+        Paragraph::new(detail)
+            .block(block("APPROVAL CONSOLE"))
+            .wrap(Wrap { trim: false }),
+        layout[1],
+    );
+}
+
 fn render_messages(frame: &mut Frame, area: Rect, app: &DashboardApp) {
     let layout = Layout::default()
         .direction(Direction::Horizontal)
@@ -1740,17 +1958,19 @@ fn render_help(frame: &mut Frame, area: Rect, _app: &DashboardApp) {
     let left = Text::from(vec![
         Line::from(Span::styled("COMMAND DECK", neon(Color::Cyan))),
         Line::from(""),
-        Line::from("1-6 switch tabs"),
+        Line::from("1-7 switch tabs"),
         Line::from("Tab / Shift+Tab cycle tabs"),
         Line::from("j/k or arrows move the current list"),
         Line::from("r refresh local snapshot"),
         Line::from("d pulse discovery now"),
+        Line::from("a accept selected pending request"),
         Line::from("/ filter peers"),
         Line::from("s subscribe to a topic"),
         Line::from("b broadcast to a topic"),
         Line::from("g grant selected peer"),
         Line::from("n send note to selected peer"),
         Line::from("t send summary task"),
+        Line::from("d deny selected pending request (on Requests tab)"),
         Line::from("m toggle inbox/outbox"),
         Line::from("? jump to this help tab"),
         Line::from("q quit"),
@@ -1771,6 +1991,7 @@ fn render_help(frame: &mut Frame, area: Rect, _app: &DashboardApp) {
         Line::from("Overview: node, reachability, peer preview, and alerts"),
         Line::from("Peers: full list and selected peer detail"),
         Line::from("Topics: public lanes and subscription hints"),
+        Line::from("Requests: pending delegate approvals"),
         Line::from("Messages: inbox / outbox with body detail"),
         Line::from("Actions: guided operator actions"),
         Line::from("Help: this quick reference"),
@@ -1778,6 +1999,7 @@ fn render_help(frame: &mut Frame, area: Rect, _app: &DashboardApp) {
         Line::from(Span::styled("INBOX ALERTS", neon(Color::Yellow))),
         Line::from("A * on the Messages tab means new inbound mail arrived."),
         Line::from("Opening the Messages tab while viewing Inbox clears that alert."),
+        Line::from("A ! on the Requests tab means delegated work is awaiting approval."),
         Line::from(""),
         Line::from(Span::styled("PEER STATES", neon(Color::LightGreen))),
         Line::from("active: recently seen on the mesh"),
@@ -1794,14 +2016,16 @@ fn render_help(frame: &mut Frame, area: Rect, _app: &DashboardApp) {
 
 fn render_footer(frame: &mut Frame, area: Rect, app: &DashboardApp) {
     let mut spans = vec![
-        Span::styled("1-6", neon(Color::Cyan)),
+        Span::styled("1-7", neon(Color::Cyan)),
         Span::raw(" tabs  "),
         Span::styled("j/k", neon(Color::Cyan)),
         Span::raw(" move  "),
         Span::styled("r", neon(Color::Cyan)),
         Span::raw(" refresh  "),
         Span::styled("d", neon(Color::Cyan)),
-        Span::raw(" discover  "),
+        Span::raw(if app.current_tab() == TabPage::Requests { " deny  " } else { " discover  " }),
+        Span::styled("a", neon(Color::Cyan)),
+        Span::raw(" accept  "),
         Span::styled("/", neon(Color::Cyan)),
         Span::raw(" filter  "),
         Span::styled("?", neon(Color::Cyan)),
@@ -1929,6 +2153,9 @@ fn kind_label(kind: &MessageKind) -> &'static str {
 fn status_label(status: &crate::models::MessageStatus) -> &'static str {
     match status {
         crate::models::MessageStatus::Received => "received",
+        crate::models::MessageStatus::Pending => "pending",
+        crate::models::MessageStatus::Approved => "approved",
+        crate::models::MessageStatus::Denied => "denied",
         crate::models::MessageStatus::Blocked => "blocked",
         crate::models::MessageStatus::Queued => "queued",
         crate::models::MessageStatus::Delivered => "delivered",

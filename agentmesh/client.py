@@ -92,6 +92,19 @@ class AgentMeshClient:
     def delegate(self, payload: dict[str, Any]) -> dict[str, Any]:
         return self._client.post("/v1/delegate", json=payload).raise_for_status().json()
 
+    def pending(self, limit: int = 50) -> list[dict[str, Any]]:
+        return (
+            self._client.get("/v1/delegate/pending", params={"limit": limit})
+            .raise_for_status()
+            .json()
+        )
+
+    def accept_request(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._client.post("/v1/delegate/accept", json=payload).raise_for_status().json()
+
+    def deny_request(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._client.post("/v1/delegate/deny", json=payload).raise_for_status().json()
+
     def send(self, payload: dict[str, Any]) -> dict[str, Any]:
         return self._client.post("/v1/messages/send", json=payload).raise_for_status().json()
 

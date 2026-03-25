@@ -100,6 +100,9 @@ pub enum MessageDirection {
 #[serde(rename_all = "snake_case")]
 pub enum MessageStatus {
     Received,
+    Pending,
+    Approved,
+    Denied,
     Blocked,
     Queued,
     Delivered,
@@ -414,6 +417,49 @@ pub struct DelegateResultBody {
     pub summary: Option<String>,
     #[serde(default)]
     pub reply_to_message_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingDelegateRequest {
+    pub message_id: String,
+    pub peer_id: String,
+    #[serde(default)]
+    pub peer_label: Option<String>,
+    #[serde(default)]
+    pub peer_agent_label: Option<String>,
+    #[serde(default)]
+    pub peer_agent_description: Option<String>,
+    pub task_id: String,
+    pub task_type: String,
+    pub instruction: String,
+    #[serde(default)]
+    pub input: serde_json::Value,
+    #[serde(default)]
+    pub context: Option<serde_json::Value>,
+    #[serde(default)]
+    pub max_output_chars: Option<usize>,
+    #[serde(default)]
+    pub capability: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DelegateDecisionRequest {
+    pub message_id: String,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DelegateDecisionResponse {
+    pub message_id: String,
+    pub peer_id: String,
+    pub action: String,
+    pub status: String,
+    #[serde(default)]
+    pub reply_message_id: Option<String>,
+    #[serde(default)]
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

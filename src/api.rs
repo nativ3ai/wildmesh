@@ -9,9 +9,9 @@ use tracing::info;
 
 use crate::models::{
     AddPeerRequest, ArtifactFetchRequest, ArtifactOfferRequest, ArtifactRecord, BroadcastRequest,
-    BroadcastResponse, CapabilityGrant, ContextCapsuleRequest, DelegateWorkRequest,
-    DiscoveryAnnounceRequest, GrantRequest, PeerRecord, SendMessageRequest, SubscribeRequest,
-    SubscriptionRecord,
+    BroadcastResponse, CapabilityGrant, ContextCapsuleRequest, DelegateDecisionRequest,
+    DelegateDecisionResponse, DelegateWorkRequest, DiscoveryAnnounceRequest, GrantRequest,
+    PeerRecord, PendingDelegateRequest, SendMessageRequest, SubscribeRequest, SubscriptionRecord,
 };
 use crate::service::MeshService;
 
@@ -36,6 +36,9 @@ pub fn router(service: MeshService) -> Router {
         .route("/v1/artifacts/offer", post(offer_artifact))
         .route("/v1/artifacts/fetch", post(fetch_artifact))
         .route("/v1/delegate", post(delegate_work))
+        .route("/v1/delegate/pending", get(list_pending_delegate_requests))
+        .route("/v1/delegate/accept", post(approve_delegate_request))
+        .route("/v1/delegate/deny", post(deny_delegate_request))
         .route("/v1/discovery/announce", post(discovery_announce))
         .with_state(service)
 }
@@ -265,6 +268,39 @@ async fn delegate_work(
 ) -> Result<Json<crate::models::SendMessageResponse>, (axum::http::StatusCode, String)> {
     service
         .delegate_work(payload)
+        .await
+        .map(Json)
+        .map_err(|err| (axum::http::StatusCode::BAD_REQUEST, err.to_string()))
+}
+
+async fn list_pending_delegate_requests(
+    State(service): State<MeshService>,
+    Query(limit): Query<LimitQuery>,
+) -> Result<Json<Vec<PendingDelegateRequest>>, axum::http::StatusCode> {
+    service
+        .list_pending_delegate_requests(limit.limit.unwrap_or(50).clamp(1, 200))
+        .await
+        .map(Json)
+        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+async fn approve_delegate_request(
+    State(service): State<MeshService>,
+    Json(payload): Json<DelegateDecisionRequest>,
+) -> Result<Json<DelegateDecisionResponse>, (axum::http::StatusCode, String)> {
+    service
+        .approve_delegate_request(payload)
+        .await
+        .map(Json)
+        .map_err(|err| (axum::http::StatusCode::BAD_REQUEST, err.to_string()))
+}
+
+async fn deny_delegate_request(
+    State(service): State<MeshService>,
+    Json(payload): Json<DelegateDecisionRequest>,
+) -> Result<Json<DelegateDecisionResponse>, (axum::http::StatusCode, String)> {
+    service
+        .deny_delegate_request(payload)
         .await
         .map(Json)
         .map_err(|err| (axum::http::StatusCode::BAD_REQUEST, err.to_string()))

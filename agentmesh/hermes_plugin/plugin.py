@@ -8,10 +8,13 @@ from .tools import (
     mesh_broadcast,
     mesh_discover_now,
     mesh_delegate_work,
+    mesh_accept_request,
     mesh_fetch_artifact,
     mesh_fetch_inbox,
+    mesh_deny_request,
     mesh_grant_capability,
     mesh_list_artifacts,
+    mesh_list_pending_requests,
     mesh_list_peers,
     mesh_list_subscriptions,
     mesh_offer_artifact,
@@ -270,6 +273,65 @@ def register(ctx) -> None:
         is_async=False,
         description="Send a delegated work request to a cooperating peer.",
         emoji="⚙️",
+    )
+    ctx.register_tool(
+        name="wildmesh_list_pending_requests",
+        toolset=TOOLSET,
+        schema={
+            "name": "wildmesh_list_pending_requests",
+            "description": "List inbound delegated work requests that are waiting for local approval.",
+            "parameters": {
+                "type": "object",
+                "properties": {"limit": {"type": "integer", "minimum": 1, "maximum": 200}},
+                "additionalProperties": False,
+            },
+        },
+        handler=mesh_list_pending_requests,
+        check_fn=check_agentmesh_available,
+        is_async=False,
+        description="Inspect pending inbound delegate requests awaiting approval.",
+        emoji="📨",
+    )
+    ctx.register_tool(
+        name="wildmesh_accept_request",
+        toolset=TOOLSET,
+        schema={
+            "name": "wildmesh_accept_request",
+            "description": "Approve a pending WildMesh delegated work request and trigger local execution.",
+            "parameters": {
+                "type": "object",
+                "properties": {"message_id": {"type": "string"}},
+                "required": ["message_id"],
+                "additionalProperties": False,
+            },
+        },
+        handler=mesh_accept_request,
+        check_fn=check_agentmesh_available,
+        is_async=False,
+        description="Approve a pending delegated request.",
+        emoji="✅",
+    )
+    ctx.register_tool(
+        name="wildmesh_deny_request",
+        toolset=TOOLSET,
+        schema={
+            "name": "wildmesh_deny_request",
+            "description": "Deny a pending WildMesh delegated work request and notify the requester.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "message_id": {"type": "string"},
+                    "reason": {"type": "string"},
+                },
+                "required": ["message_id"],
+                "additionalProperties": False,
+            },
+        },
+        handler=mesh_deny_request,
+        check_fn=check_agentmesh_available,
+        is_async=False,
+        description="Deny a pending delegated request.",
+        emoji="⛔",
     )
     ctx.register_tool(
         name="wildmesh_send_task",

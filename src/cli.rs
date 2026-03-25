@@ -265,6 +265,24 @@ pub enum Commands {
         #[arg(long)]
         home: Option<PathBuf>,
     },
+    Pending {
+        #[arg(long, default_value_t = 50)]
+        limit: i64,
+        #[arg(long)]
+        home: Option<PathBuf>,
+    },
+    AcceptRequest {
+        message_id: String,
+        #[arg(long)]
+        home: Option<PathBuf>,
+    },
+    DenyRequest {
+        message_id: String,
+        #[arg(long)]
+        reason: Option<String>,
+        #[arg(long)]
+        home: Option<PathBuf>,
+    },
     Send {
         peer_id: String,
         kind: String,
@@ -566,7 +584,7 @@ pub async fn main_entry() -> Result<()> {
                     "executor_mode": cfg.executor_mode,
                     "accepts_context_capsules": true,
                     "accepts_artifact_exchange": true,
-                    "accepts_delegate_work": cfg.cooperate_enabled && cfg.executor_mode != "disabled"
+                    "accepts_delegate_work": cfg.executor_mode != "disabled"
                 },
                 "nat_status": "unknown",
                 "public_address": Value::Null,
@@ -879,6 +897,32 @@ pub async fn main_entry() -> Result<()> {
             println!(
                 "{}",
                 serde_json::to_string_pretty(&post_json(home, "/v1/delegate", &payload).await?)?
+            );
+        }
+        Commands::Pending { limit, home } => {
+            let url = format!("/v1/delegate/pending?limit={}", limit.clamp(1, 200));
+            println!("{}", serde_json::to_string_pretty(&get_json(home, &url).await?)?);
+        }
+        Commands::AcceptRequest { message_id, home } => {
+            let payload = json!({ "message_id": message_id });
+            println!(
+                "{}",
+                serde_json::to_string_pretty(
+                    &post_json(home, "/v1/delegate/accept", &payload).await?
+                )?
+            );
+        }
+        Commands::DenyRequest {
+            message_id,
+            reason,
+            home,
+        } => {
+            let payload = json!({ "message_id": message_id, "reason": reason });
+            println!(
+                "{}",
+                serde_json::to_string_pretty(
+                    &post_json(home, "/v1/delegate/deny", &payload).await?
+                )?
             );
         }
         Commands::Send {
@@ -1442,7 +1486,7 @@ async fn run_sidecar(home: Option<PathBuf>) -> Result<()> {
                         "executor_mode": cfg.executor_mode,
                         "accepts_context_capsules": true,
                         "accepts_artifact_exchange": true,
-                        "accepts_delegate_work": cfg.cooperate_enabled && cfg.executor_mode != "disabled"
+                        "accepts_delegate_work": cfg.executor_mode != "disabled"
                     },
                     "nat_status": "unknown",
                     "public_address": Value::Null,
@@ -1636,6 +1680,29 @@ async fn run_sidecar(home: Option<PathBuf>) -> Result<()> {
             Some("delegate") => {
                 client
                     .post(format!("{base}/v1/delegate"))
+                    .json(&value["payload"])
+                    .send()
+                    .await?
+                    .error_for_status()?
+                    .json::<Value>()
+                    .await?
+            }
+            Some("pending") => {
+                json!({"items": client.get(format!("{base}/v1/delegate/pending?limit={}", value.get("limit").and_then(Value::as_i64).unwrap_or(50))).send().await?.error_for_status()?.json::<Value>().await?})
+            }
+            Some("accept_request") => {
+                client
+                    .post(format!("{base}/v1/delegate/accept"))
+                    .json(&value["payload"])
+                    .send()
+                    .await?
+                    .error_for_status()?
+                    .json::<Value>()
+                    .await?
+            }
+            Some("deny_request") => {
+                client
+                    .post(format!("{base}/v1/delegate/deny"))
                     .json(&value["payload"])
                     .send()
                     .await?

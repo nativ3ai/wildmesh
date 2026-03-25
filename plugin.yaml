@@ -11,6 +11,14 @@ provides_tools:
   - wildmesh_grant_capability
   - wildmesh_subscribe_topic
   - wildmesh_list_subscriptions
+  - wildmesh_send_context
+  - wildmesh_list_artifacts
+  - wildmesh_offer_artifact
+  - wildmesh_fetch_artifact
+  - wildmesh_delegate_work
+  - wildmesh_list_pending_requests
+  - wildmesh_accept_request
+  - wildmesh_deny_request
   - wildmesh_send_task
   - wildmesh_broadcast
   - wildmesh_discover_now

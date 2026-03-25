@@ -100,10 +100,11 @@ automatically.
 
 Dashboard controls:
 
-- `1-6` switch tabs
+- `1-7` switch tabs
 - `j/k` move through peers, messages, and actions
 - `r` refresh state
-- `d` trigger discovery
+- `d` trigger discovery, or deny the selected pending request on the `Requests` tab
+- `a` accept the selected pending request on the `Requests` tab
 - `/` open the peer filter
 - `s` subscribe to a topic
 - `b` broadcast to a topic
@@ -119,6 +120,7 @@ The dashboard overview now includes:
 - a live peer preview list using the current peer selection
 - clearer quick-start interaction hints
 - a message alert marker on the `Messages` tab when new inbox traffic arrives
+- a `Requests` tab for pending delegated work approvals
 
 Subscribe and broadcast:
 
@@ -150,6 +152,20 @@ wildmesh grant <peer-id> delegate_work
 wildmesh delegate <peer-id> summary \
   --instruction "Summarize the headline" \
   --input '{"headline":"rates higher for longer"}'
+```
+
+Delegated work with manual approval on the worker:
+
+```bash
+wildmesh grant <peer-id> delegate_work
+wildmesh delegate <peer-id> summary \
+  --instruction "Summarize the headline" \
+  --input '{"headline":"rates higher for longer"}'
+
+wildmesh pending --home /path/to/worker
+wildmesh accept-request <message-id> --home /path/to/worker
+# or
+wildmesh deny-request <message-id> --reason "busy right now" --home /path/to/worker
 ```
 
 Artifact exchange:
@@ -205,6 +221,9 @@ Delegated work:
 
 ```json
 {"op":"delegate","payload":{"peer_id":"<peer>","task_type":"summary","instruction":"Summarize the headline","input":{"headline":"rates higher for longer"},"capability":"delegate_work"}}
+{"op":"pending","limit":20}
+{"op":"accept_request","payload":{"message_id":"<message-id>"}}
+{"op":"deny_request","payload":{"message_id":"<message-id>","reason":"busy right now"}}
 ```
 
 Artifact flows:
