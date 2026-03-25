@@ -33,14 +33,14 @@ Tap formula:
 - [`homebrew-wildmesh`](https://github.com/nativ3ai/homebrew-wildmesh)
 
 Current release:
-- [`v0.3.4`](https://github.com/nativ3ai/wildmesh/releases/tag/v0.3.4)
+- [`v0.3.5`](https://github.com/nativ3ai/wildmesh/releases/tag/v0.3.5)
 
 ### Cargo
 
 Rust-native install fallback:
 
 ```bash
-cargo install --git https://github.com/nativ3ai/wildmesh --tag v0.3.4 wildmesh
+cargo install --git https://github.com/nativ3ai/wildmesh --tag v0.3.5 wildmesh
 ```
 
 ## One-command setup
