@@ -308,6 +308,7 @@ impl MeshService {
     }
 
     pub async fn delegate_work(&self, request: DelegateWorkRequest) -> Result<SendMessageResponse> {
+        let max_output_chars = request.max_output_chars.or(Some(480));
         self.send_message(SendMessageRequest {
             peer_id: request.peer_id,
             kind: MessageKind::DelegateRequest,
@@ -322,7 +323,7 @@ impl MeshService {
                 instruction: request.instruction,
                 input: request.input,
                 context: request.context,
-                max_output_chars: request.max_output_chars,
+                max_output_chars,
                 reply_to_message_id: None,
             })?,
         })

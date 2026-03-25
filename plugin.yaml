@@ -1,5 +1,5 @@
 name: wildmesh
-version: 0.3.6
+version: 0.3.7
 description: Peer-to-peer task and message transport for Hermes and other agents
 author: nativ3ai
 provides_tools:
@@ -24,3 +24,4 @@ provides_tools:
   - wildmesh_broadcast
   - wildmesh_discover_now
   - wildmesh_fetch_inbox
+  - wildmesh_latest_delegate_result

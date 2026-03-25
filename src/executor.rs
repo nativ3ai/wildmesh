@@ -1,5 +1,6 @@
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
+use std::time::Duration;
 
 use crate::config::AgentMeshConfig;
 use crate::models::{DelegateRequestBody, LocalProfile};
@@ -63,7 +64,9 @@ async fn execute_openai_compat(
         .executor_model
         .clone()
         .unwrap_or_else(|| "default".to_string());
-    let client = reqwest::Client::builder().build()?;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(config.executor_timeout_secs.max(5)))
+        .build()?;
     let mut req = client.post(format!("{}/v1/chat/completions", url.trim_end_matches('/')));
     if let Some(env_name) = &config.executor_api_key_env {
         if let Ok(token) = std::env::var(env_name) {
@@ -73,7 +76,7 @@ async fn execute_openai_compat(
         }
     }
     let system = format!(
-        "You are WildMesh's delegated worker for node {}. Return compact JSON only with keys: summary, output. Keep it concise and operational.",
+        "You are WildMesh's delegated worker for node {}. Return compact JSON only with keys: summary, output. Keep it concise, bounded, and operational. Work only from the supplied instruction, input, and context. Do not browse, do not use external tools, and do not expand the task beyond what was requested.",
         profile
             .agent_label
             .clone()

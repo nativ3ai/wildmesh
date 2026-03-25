@@ -28,6 +28,95 @@ def _json_result(payload: Any) -> str:
     return json.dumps(payload, indent=2, sort_keys=True)
 
 
+def _peer_index(client: AgentMeshClient) -> dict[str, dict[str, Any]]:
+    try:
+        peers = client.list_peers()
+    except Exception:
+        return {}
+    return {
+        str(peer.get("peer_id")): peer
+        for peer in peers
+        if isinstance(peer, dict) and peer.get("peer_id")
+    }
+
+
+def _peer_label(peer_index: dict[str, dict[str, Any]], peer_id: str | None) -> str | None:
+    if not peer_id:
+        return None
+    peer = peer_index.get(peer_id, {})
+    for key in ("agent_label", "label", "peer_id"):
+        value = peer.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    return peer_id
+
+
+def _delegate_result_view(
+    message: dict[str, Any],
+    peer_index: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    body = message.get("body", {}) if isinstance(message.get("body"), dict) else {}
+    output = body.get("output")
+    nested_result = output.get("result") if isinstance(output, dict) and isinstance(output.get("result"), dict) else {}
+    summary = (
+        body.get("summary")
+        or (output.get("summary") if isinstance(output, dict) else None)
+        or nested_result.get("summary")
+        or (nested_result.get("output") if isinstance(nested_result.get("output"), str) else None)
+    )
+    text_output = (
+        (output.get("output") if isinstance(output, dict) and isinstance(output.get("output"), str) else None)
+        or (nested_result.get("output") if isinstance(nested_result.get("output"), str) else None)
+    )
+    peer_id = message.get("peer_id")
+    return {
+        "message_id": message.get("id"),
+        "created_at": message.get("created_at"),
+        "peer_id": peer_id,
+        "peer_label": _peer_label(peer_index, peer_id),
+        "status": body.get("status") or message.get("status"),
+        "reason": message.get("reason"),
+        "task_id": body.get("task_id"),
+        "task_type": body.get("task_type"),
+        "handled_by": body.get("handled_by"),
+        "summary": summary,
+        "text_output": text_output,
+        "output": output,
+        "raw_body": body,
+    }
+
+
+def _delegate_results(
+    messages: list[dict[str, Any]],
+    peer_index: dict[str, dict[str, Any]],
+    *,
+    peer_id: str | None = None,
+    peer_label: str | None = None,
+) -> list[dict[str, Any]]:
+    label_match = peer_label.lower() if isinstance(peer_label, str) and peer_label.strip() else None
+    results: list[dict[str, Any]] = []
+    for message in messages:
+        if message.get("kind") != "delegate_result":
+            continue
+        if peer_id and message.get("peer_id") != peer_id:
+            continue
+        view = _delegate_result_view(message, peer_index)
+        if label_match:
+            haystack = " ".join(
+                value
+                for value in [
+                    view.get("peer_label"),
+                    view.get("handled_by"),
+                    view.get("peer_id"),
+                ]
+                if isinstance(value, str)
+            ).lower()
+            if label_match not in haystack:
+                continue
+        results.append(view)
+    return results
+
+
 def _binary_path() -> str:
     binary = shutil.which("wildmesh")
     if not binary:
@@ -381,6 +470,48 @@ def mesh_fetch_inbox(args: dict[str, Any] | None = None, **_meta: Any) -> str:
     args = _normalize_args(args)
     client = _client()
     try:
-        return _json_result({"items": client.inbox(limit=args.get("limit", 50))})
+        items = client.inbox(limit=args.get("limit", 50))
+        peer_index = _peer_index(client)
+        delegate_results = _delegate_results(
+            items,
+            peer_index,
+            peer_id=args.get("peer_id"),
+            peer_label=args.get("peer_label"),
+        )
+        return _json_result({
+            "items": items,
+            "delegate_results": delegate_results,
+            "latest_delegate_result": delegate_results[0] if delegate_results else None,
+            "note": (
+                "delegate_result entries already include inline summary/output when the worker "
+                "returns them. task_id is not an artifact id. Only fetch artifacts when a peer "
+                "explicitly offered one."
+            ),
+        })
+    finally:
+        client.close()
+
+
+def mesh_latest_delegate_result(args: dict[str, Any] | None = None, **_meta: Any) -> str:
+    args = _normalize_args(args)
+    client = _client()
+    try:
+        items = client.inbox(limit=args.get("limit", 50))
+        peer_index = _peer_index(client)
+        delegate_results = _delegate_results(
+            items,
+            peer_index,
+            peer_id=args.get("peer_id"),
+            peer_label=args.get("peer_label"),
+        )
+        latest = delegate_results[0] if delegate_results else None
+        return _json_result({
+            "found": latest is not None,
+            "result": latest,
+            "note": (
+                "Use the inline output above for normal delegated-work replies. "
+                "Artifacts are separate and should only be fetched after an explicit artifact offer."
+            ),
+        })
     finally:
         client.close()

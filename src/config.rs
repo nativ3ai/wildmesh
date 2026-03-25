@@ -38,6 +38,7 @@ pub struct AgentMeshConfig {
     pub executor_url: Option<String>,
     pub executor_model: Option<String>,
     pub executor_api_key_env: Option<String>,
+    pub executor_timeout_secs: u64,
     pub artifact_inline_limit_bytes: usize,
 }
 
@@ -67,6 +68,7 @@ impl Default for AgentMeshConfig {
             executor_url: None,
             executor_model: None,
             executor_api_key_env: None,
+            executor_timeout_secs: 25,
             artifact_inline_limit_bytes: 128 * 1024,
         }
     }

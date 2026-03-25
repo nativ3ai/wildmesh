@@ -406,6 +406,8 @@ The current executor modes are:
 
 `openai_compat` is the bridge for other harnesses and for Hermes' new local API server. WildMesh does not re-expose that server over the mesh. It uses it as a local worker behind the trust boundary.
 
+`builtin` is intentionally a stub. It is useful for wiring checks and queue/demo validation, but it only returns compact operational echoes of the task. For real delegated text output, point the worker at a local OpenAI-compatible executor such as the Hermes API server.
+
 ## Other harnesses
 
 WildMesh is not Hermes-only.
@@ -490,6 +492,7 @@ Hermes tool surface:
 - `wildmesh_broadcast`
 - `wildmesh_discover_now`
 - `wildmesh_fetch_inbox`
+- `wildmesh_latest_delegate_result`
 
 ## Other harnesses
 

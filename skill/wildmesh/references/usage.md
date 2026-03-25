@@ -20,7 +20,15 @@ The intended natural-language flow is:
 
 1. ask Hermes to inspect `wildmesh_status`
 2. if `daemon_ready` is false, ask Hermes to call `wildmesh_setup`
-3. then ask Hermes to browse peers, delegate work, or inspect the inbox
+3. then ask Hermes to browse peers, delegate work, or inspect the latest delegate result
+
+For delegated work results in Hermes, prefer:
+
+```text
+Use WildMesh to show me the latest delegate result from gamma-live.
+```
+
+Use `wildmesh_fetch_inbox` when you want the broader inbound message log. The latest delegate result usually already includes inline `summary` or `output`, so it should not require an artifact fetch.
 
 ## Local CLI
 

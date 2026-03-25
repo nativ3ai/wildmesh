@@ -14,10 +14,14 @@ class _ClientStub:
         status_result: dict[str, Any] | None = None,
         status_error: Exception | None = None,
         profile_result: dict[str, Any] | None = None,
+        peers_result: list[dict[str, Any]] | None = None,
+        inbox_result: list[dict[str, Any]] | None = None,
     ) -> None:
         self._status_result = status_result or {"identity": {"peer_id": "peer-1"}}
         self._status_error = status_error
         self._profile_result = profile_result or {"agent_label": "node-1"}
+        self._peers_result = peers_result or []
+        self._inbox_result = inbox_result or []
 
     def close(self) -> None:
         return None
@@ -29,6 +33,12 @@ class _ClientStub:
 
     def profile(self) -> dict[str, Any]:
         return dict(self._profile_result)
+
+    def list_peers(self) -> list[dict[str, Any]]:
+        return list(self._peers_result)
+
+    def inbox(self, limit: int = 50) -> list[dict[str, Any]]:
+        return list(self._inbox_result)[:limit]
 
 
 def test_mesh_profile_ignores_task_metadata(monkeypatch):
@@ -97,3 +107,122 @@ def test_mesh_setup_runs_local_bootstrap(monkeypatch):
     assert result["ok"] is True
     assert result["daemon_ready"] is True
     assert result["profile"]["agent_label"] == "mesh-node"
+
+
+def test_mesh_latest_delegate_result_prefers_inline_output(monkeypatch):
+    monkeypatch.setattr(
+        tools,
+        "_client",
+        lambda: _ClientStub(
+            peers_result=[
+                {
+                    "peer_id": "peer-gamma",
+                    "agent_label": "gamma-live",
+                }
+            ],
+            inbox_result=[
+                {
+                    "id": "msg-1",
+                    "kind": "delegate_result",
+                    "peer_id": "peer-gamma",
+                    "created_at": "2026-03-25T20:36:26Z",
+                    "status": "received",
+                    "reason": "accepted",
+                    "body": {
+                        "status": "completed",
+                        "task_id": "task-1",
+                        "task_type": "summary",
+                        "handled_by": "gamma-live",
+                        "summary": "gamma summary",
+                        "output": {"summary": "actual delegated text"},
+                    },
+                }
+            ],
+        ),
+    )
+    result = json.loads(tools.mesh_latest_delegate_result({"peer_label": "gamma-live"}))
+    assert result["found"] is True
+    assert result["result"]["peer_label"] == "gamma-live"
+    assert result["result"]["task_id"] == "task-1"
+    assert result["result"]["summary"] == "gamma summary"
+    assert result["result"]["output"]["summary"] == "actual delegated text"
+
+
+def test_mesh_latest_delegate_result_extracts_nested_executor_summary(monkeypatch):
+    monkeypatch.setattr(
+        tools,
+        "_client",
+        lambda: _ClientStub(
+            peers_result=[
+                {
+                    "peer_id": "peer-gamma",
+                    "agent_label": "gamma-live",
+                }
+            ],
+            inbox_result=[
+                {
+                    "id": "msg-3",
+                    "kind": "delegate_result",
+                    "peer_id": "peer-gamma",
+                    "created_at": "2026-03-25T21:13:59Z",
+                    "status": "received",
+                    "reason": "accepted",
+                    "body": {
+                        "status": "completed",
+                        "task_id": "task-3",
+                        "task_type": "summary",
+                        "handled_by": "gamma-live",
+                        "summary": None,
+                        "output": {
+                            "mode": "openai_compat",
+                            "model": "hermes-agent",
+                            "result": {
+                                "summary": "nested summary",
+                                "output": "nested output",
+                            },
+                        },
+                    },
+                }
+            ],
+        ),
+    )
+    result = json.loads(tools.mesh_latest_delegate_result({"peer_label": "gamma-live"}))
+    assert result["found"] is True
+    assert result["result"]["task_id"] == "task-3"
+    assert result["result"]["summary"] == "nested summary"
+    assert result["result"]["text_output"] == "nested output"
+
+
+def test_mesh_fetch_inbox_surfaces_latest_delegate_result(monkeypatch):
+    monkeypatch.setattr(
+        tools,
+        "_client",
+        lambda: _ClientStub(
+            peers_result=[
+                {
+                    "peer_id": "peer-gamma",
+                    "agent_label": "gamma-live",
+                }
+            ],
+            inbox_result=[
+                {
+                    "id": "msg-2",
+                    "kind": "delegate_result",
+                    "peer_id": "peer-gamma",
+                    "created_at": "2026-03-25T20:40:00Z",
+                    "body": {
+                        "status": "completed",
+                        "task_id": "task-2",
+                        "task_type": "task",
+                        "handled_by": "gamma-live",
+                        "summary": "inline summary",
+                        "output": "inline output",
+                    },
+                }
+            ],
+        ),
+    )
+    result = json.loads(tools.mesh_fetch_inbox({"peer_label": "gamma-live"}))
+    assert result["latest_delegate_result"]["task_id"] == "task-2"
+    assert result["delegate_results"][0]["output"] == "inline output"
+    assert "task_id is not an artifact id" in result["note"]

@@ -16,6 +16,7 @@ from .tools import (
     mesh_list_artifacts,
     mesh_list_pending_requests,
     mesh_list_peers,
+    mesh_latest_delegate_result,
     mesh_list_subscriptions,
     mesh_offer_artifact,
     mesh_profile,
@@ -434,10 +435,14 @@ def register(ctx) -> None:
         toolset=TOOLSET,
         schema={
             "name": "wildmesh_fetch_inbox",
-            "description": "Fetch recent inbound Wildmesh messages.",
+            "description": "Fetch recent inbound Wildmesh messages. For delegated work replies, prefer the inline delegate_results/latest_delegate_result fields before attempting any artifact fetch.",
             "parameters": {
                 "type": "object",
-                "properties": {"limit": {"type": "integer", "minimum": 1, "maximum": 200}},
+                "properties": {
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 200},
+                    "peer_id": {"type": "string"},
+                    "peer_label": {"type": "string"},
+                },
                 "additionalProperties": False,
             },
         },
@@ -446,4 +451,26 @@ def register(ctx) -> None:
         is_async=False,
         description="Inspect recent inbound peer messages.",
         emoji="📥",
+    )
+    ctx.register_tool(
+        name="wildmesh_latest_delegate_result",
+        toolset=TOOLSET,
+        schema={
+            "name": "wildmesh_latest_delegate_result",
+            "description": "Return the newest inbound delegate_result with inline summary/output. Use this instead of artifact fetch when the user asks for the latest completed delegated job.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 200},
+                    "peer_id": {"type": "string"},
+                    "peer_label": {"type": "string"},
+                },
+                "additionalProperties": False,
+            },
+        },
+        handler=mesh_latest_delegate_result,
+        check_fn=check_agentmesh_available,
+        is_async=False,
+        description="Get the latest delegated-work result directly, including inline output when present.",
+        emoji="✅",
     )

@@ -62,6 +62,7 @@ class AgentMeshConfig:
     executor_url: str | None = None
     executor_model: str | None = None
     executor_api_key_env: str | None = None
+    executor_timeout_secs: int = 25
     artifact_inline_limit_bytes: int = 128 * 1024
 
     @property
@@ -108,6 +109,7 @@ class AgentMeshConfig:
                     "executor_url": self.executor_url,
                     "executor_model": self.executor_model,
                     "executor_api_key_env": self.executor_api_key_env,
+                    "executor_timeout_secs": self.executor_timeout_secs,
                     "artifact_inline_limit_bytes": self.artifact_inline_limit_bytes,
                 },
                 indent=2,
@@ -146,6 +148,7 @@ def load_config(home: Path | None = None) -> AgentMeshConfig:
     raw.setdefault("executor_url", None)
     raw.setdefault("executor_model", None)
     raw.setdefault("executor_api_key_env", None)
+    raw.setdefault("executor_timeout_secs", 25)
     raw.setdefault("artifact_inline_limit_bytes", 128 * 1024)
     cfg = AgentMeshConfig(home=root, **raw)
     return _apply_home_port_defaults(cfg)

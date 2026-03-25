@@ -1503,9 +1503,23 @@ async fn maybe_handle_collaboration(
             if let Ok(request) =
                 serde_json::from_value::<DelegateRequestBody>(stored_message.body.clone())
             {
-                if let Err(err) =
-                    execute_delegate_and_queue_result(state, &stored_message.peer_id, &envelope.id, request).await
+                if let Err(err) = execute_delegate_and_queue_result(
+                    state,
+                    &stored_message.peer_id,
+                    &envelope.id,
+                    request.clone(),
+                )
+                .await
                 {
+                    let err_text = err.to_string();
+                    let _ = queue_delegate_failure(
+                        state,
+                        &stored_message.peer_id,
+                        &envelope.id,
+                        &request,
+                        &err_text,
+                    )
+                    .await;
                     warn!(target: "agentmesh", error = %err, peer_id = %stored_message.peer_id, "delegate execution failed");
                 }
             }
@@ -1625,6 +1639,47 @@ async fn execute_delegate_and_queue_result(
             respond_to: None,
         })
         .map_err(|_| anyhow!("delegate result queue is full"))?;
+    Ok(())
+}
+
+async fn queue_delegate_failure(
+    state: &RuntimeState,
+    peer_id: &str,
+    reply_to_message_id: &str,
+    request: &DelegateRequestBody,
+    error: &str,
+) -> Result<()> {
+    let handled_by = state
+        .config
+        .agent_label
+        .clone()
+        .unwrap_or_else(|| state.identity.app_identity.peer_id());
+    let payload = DelegateResultBody {
+        task_id: request.task_id.clone(),
+        task_type: request.task_type.clone(),
+        status: "failed".to_string(),
+        handled_by: handled_by.clone(),
+        output: json!({
+            "reason": error,
+            "kind": "executor_failure",
+        }),
+        summary: Some(format!(
+            "delegate execution failed on {}: {}",
+            handled_by,
+            error.trim()
+        )),
+        reply_to_message_id: Some(reply_to_message_id.to_string()),
+    };
+    state
+        .command_sender
+        .try_send(SwarmCommand::SendLocalMessage {
+            peer_id: peer_id.to_string(),
+            kind: MessageKind::DelegateResult,
+            capability: Some("delegate_work".to_string()),
+            body: serde_json::to_value(payload).unwrap_or_else(|_| json!({})),
+            respond_to: None,
+        })
+        .map_err(|_| anyhow!("delegate failure queue is full"))?;
     Ok(())
 }
 
