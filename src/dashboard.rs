@@ -27,7 +27,7 @@ use serde_json::{Value, json};
 use crate::config::AgentMeshConfig;
 use crate::models::{
     CapabilityGrant, MessageKind, PendingDelegateRequest, PeerRecord, StatusResponse,
-    StoredMessage, SubscriptionRecord,
+    StoredMessage, SubscriptionRecord, TopicView,
 };
 
 const REFRESH_INTERVAL: Duration = Duration::from_secs(3);
@@ -104,6 +104,7 @@ impl MessagePane {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ActionItem {
     DiscoverNow,
+    CreateChannel,
     SubscribeTopic,
     BroadcastTopic,
     GrantSelectedPeer,
@@ -113,9 +114,10 @@ enum ActionItem {
 }
 
 impl ActionItem {
-    fn all() -> [Self; 7] {
+    fn all() -> [Self; 8] {
         [
             Self::DiscoverNow,
+            Self::CreateChannel,
             Self::SubscribeTopic,
             Self::BroadcastTopic,
             Self::GrantSelectedPeer,
@@ -128,6 +130,7 @@ impl ActionItem {
     fn title(self) -> &'static str {
         match self {
             Self::DiscoverNow => "Discover the wilderness",
+            Self::CreateChannel => "Create a public channel",
             Self::SubscribeTopic => "Subscribe to a public topic",
             Self::BroadcastTopic => "Broadcast an update",
             Self::GrantSelectedPeer => "Grant selected peer a capability",
@@ -140,8 +143,11 @@ impl ActionItem {
     fn detail(self) -> &'static str {
         match self {
             Self::DiscoverNow => "Trigger a fresh discovery pass through the mesh bootstrap set.",
+            Self::CreateChannel => {
+                "Reserve a new exact-name public channel and join it locally."
+            }
             Self::SubscribeTopic => {
-                "Join a public topic so other nodes can see what this node follows."
+                "Join an existing public channel so this node can read and publish there."
             }
             Self::BroadcastTopic => "Publish a public message to a topic. Good for open chatter.",
             Self::GrantSelectedPeer => "Grant the selected peer one narrow capability label.",
@@ -159,6 +165,7 @@ impl ActionItem {
 #[derive(Debug, Clone)]
 enum ModalKind {
     PeerFilter,
+    CreateChannel,
     SubscribeTopic,
     BroadcastTopic,
     BroadcastBody { topic: String },
@@ -221,6 +228,7 @@ struct DashboardSnapshot {
     status: Option<StatusResponse>,
     peers: Vec<PeerRecord>,
     grants: Vec<CapabilityGrant>,
+    topics: Vec<TopicView>,
     subscriptions: Vec<SubscriptionRecord>,
     pending: Vec<PendingDelegateRequest>,
     inbox: Vec<StoredMessage>,
@@ -270,6 +278,7 @@ impl DashboardClient {
             status: self.get("/v1/status").ok(),
             peers: self.get("/v1/peers").unwrap_or_default(),
             grants: self.get("/v1/capabilities").unwrap_or_default(),
+            topics: self.get("/v1/topics").unwrap_or_default(),
             subscriptions: self.get("/v1/subscriptions").unwrap_or_default(),
             pending: self.get("/v1/delegate/pending?limit=50").unwrap_or_default(),
             inbox: self.get("/v1/messages/inbox?limit=50").unwrap_or_default(),
@@ -440,7 +449,7 @@ impl DashboardApp {
         self.filtered_peers().into_iter().take(5).collect()
     }
 
-    fn action_items(&self) -> [ActionItem; 7] {
+    fn action_items(&self) -> [ActionItem; 8] {
         ActionItem::all()
     }
 
@@ -519,6 +528,29 @@ impl DashboardApp {
             Err(err) => {
                 self.last_error = Some(err.to_string());
                 self.show_toast("subscription failed", Color::Red);
+            }
+        }
+    }
+
+    fn create_channel(&mut self, topic: &str) {
+        match self
+            .client
+            .post::<crate::models::CreateChannelResponse>("/v1/topics", &json!({ "topic": topic }))
+        {
+            Ok(result) => {
+                self.refresh();
+                self.show_toast(
+                    if result.created {
+                        format!("created channel {}", topic)
+                    } else {
+                        format!("joined owned channel {}", topic)
+                    },
+                    Color::Green,
+                );
+            }
+            Err(err) => {
+                self.last_error = Some(err.to_string());
+                self.show_toast("channel creation failed", Color::Red);
             }
         }
     }
@@ -647,8 +679,17 @@ impl DashboardApp {
     fn open_subscribe(&mut self) {
         self.open_modal(ModalState::new(
             ModalKind::SubscribeTopic,
-            "SUBSCRIBE",
-            "Enter a topic name like market.alerts",
+            "JOIN CHANNEL",
+            "Enter the exact name of an existing channel to join",
+            "",
+        ));
+    }
+
+    fn open_create_channel(&mut self) {
+        self.open_modal(ModalState::new(
+            ModalKind::CreateChannel,
+            "CREATE CHANNEL",
+            "Enter an exact public channel name. If it already exists globally, creation fails.",
             "",
         ));
     }
@@ -765,6 +806,14 @@ impl DashboardApp {
                 self.peer_index = 0;
                 self.modal = None;
             }
+            ModalKind::CreateChannel => {
+                if value.is_empty() {
+                    self.show_toast("channel cannot be empty", Color::Yellow);
+                } else {
+                    self.create_channel(&value);
+                    self.modal = None;
+                }
+            }
             ModalKind::SubscribeTopic => {
                 if value.is_empty() {
                     self.show_toast("topic cannot be empty", Color::Yellow);
@@ -842,6 +891,7 @@ impl DashboardApp {
     fn perform_action(&mut self) {
         match self.action_items()[self.action_index] {
             ActionItem::DiscoverNow => self.discover_now(),
+            ActionItem::CreateChannel => self.open_create_channel(),
             ActionItem::SubscribeTopic => self.open_subscribe(),
             ActionItem::BroadcastTopic => self.open_broadcast_topic(),
             ActionItem::GrantSelectedPeer => self.open_grant(),
@@ -951,6 +1001,7 @@ pub fn run(home: Option<PathBuf>) -> Result<()> {
             KeyCode::Char('d') if app.current_tab() == TabPage::Requests => app.open_deny_request(),
             KeyCode::Char('d') => app.discover_now(),
             KeyCode::Char('/') => app.open_peer_filter(),
+            KeyCode::Char('c') => app.open_create_channel(),
             KeyCode::Char('s') => app.open_subscribe(),
             KeyCode::Char('b') => app.open_broadcast_topic(),
             KeyCode::Char('g') => app.open_grant(),
@@ -1665,20 +1716,32 @@ fn render_topics(frame: &mut Frame, area: Rect, app: &DashboardApp) {
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
         .split(area);
-    let sub_items = if app.snapshot.subscriptions.is_empty() {
-        vec![ListItem::new("No topic subscriptions yet.")]
+    let channel_items = if app.snapshot.topics.is_empty() {
+        vec![ListItem::new("No public channels visible yet. Press c to create one or d to pulse discovery.")]
     } else {
         app.snapshot
-            .subscriptions
+            .topics
             .iter()
             .map(|item| {
+                let owner = item
+                    .owner_agent_label
+                    .clone()
+                    .unwrap_or_else(|| short_peer(&item.owner_peer_id));
+                let state = if item.local_subscribed {
+                    "joined"
+                } else {
+                    "remote"
+                };
                 ListItem::new(vec![
                     Line::from(Span::styled(
                         item.topic.clone(),
                         Style::default().fg(Color::White),
                     )),
                     Line::from(Span::styled(
-                        format!("joined {}", format_timestamp(item.created_at)),
+                        format!(
+                            "{} by {} :: {} peers ({} active)",
+                            state, owner, item.peer_count, item.active_peer_count
+                        ),
                         Style::default().fg(Color::DarkGray),
                     )),
                 ])
@@ -1686,33 +1749,41 @@ fn render_topics(frame: &mut Frame, area: Rect, app: &DashboardApp) {
             .collect()
     };
     frame.render_widget(
-        List::new(sub_items).block(block("SUBSCRIPTIONS")),
+        List::new(channel_items).block(block("CHANNELS")),
         layout[0],
     );
 
     let mut lines = vec![
-        Line::from(Span::styled("HOW TO USE THE TOPIC LANE", neon(Color::Cyan))),
+        Line::from(Span::styled("HOW TO USE CHANNELS", neon(Color::Cyan))),
         Line::from(""),
-        Line::from("s  subscribe to a topic"),
+        Line::from("c  create a new public channel"),
+        Line::from("s  join an existing public channel"),
         Line::from("b  broadcast a public update"),
         Line::from("d  force a discovery pulse"),
         Line::from(""),
         Line::from(Span::styled("NOTES", neon(Color::LightMagenta))),
-        Line::from("Topics are open chat lanes."),
-        Line::from("They are good for announcements, matchmaking, and chatter."),
-        Line::from("They are not local authority."),
+        Line::from("Channels are global mesh lanes with exact names."),
+        Line::from("Create reserves a name if no known peer already owns it."),
+        Line::from("Join subscribes locally so this node can read and publish there."),
+        Line::from("Broadcasts are public chatter, not local authority."),
         Line::from(""),
     ];
-    if let Some(peer) = app.selected_peer() {
+    if let Some(topic) = app.snapshot.topics.first() {
         lines.push(Line::from(Span::styled(
-            "SELECTED PEER",
+            "FIRST VISIBLE CHANNEL",
             neon(Color::Yellow),
         )));
-        lines.push(Line::from(
-            peer.agent_label
-                .clone()
-                .unwrap_or_else(|| short_peer(&peer.peer_id)),
-        ));
+        lines.push(Line::from(topic.topic.clone()));
+        lines.push(Line::from(Span::styled(
+            format!(
+                "owner {} :: {} members",
+                topic.owner_agent_label
+                    .clone()
+                    .unwrap_or_else(|| short_peer(&topic.owner_peer_id)),
+                topic.peer_count
+            ),
+            Style::default().fg(Color::DarkGray),
+        )));
     }
     frame.render_widget(
         Paragraph::new(Text::from(lines))
@@ -2014,7 +2085,7 @@ fn render_actions(frame: &mut Frame, area: Rect, app: &DashboardApp) {
         )),
         Line::from(""),
         Line::from("Direct shortcuts work from any tab:"),
-        Line::from("d discover   s subscribe   b broadcast"),
+        Line::from("d discover   c create      s join       b broadcast"),
         Line::from("g grant      n note        t summary task"),
         Line::from("m toggle inbox/outbox"),
         Line::from("Requests tab: a accept once   w trust + accept   d deny"),
@@ -2043,8 +2114,9 @@ fn render_help(frame: &mut Frame, area: Rect, _app: &DashboardApp) {
         Line::from("a accept selected pending request once"),
         Line::from("w trust peer and accept selected request"),
         Line::from("/ filter peers"),
-        Line::from("s subscribe to a topic"),
-        Line::from("b broadcast to a topic"),
+        Line::from("c create a public channel"),
+        Line::from("s join an existing channel"),
+        Line::from("b broadcast to a channel"),
         Line::from("g grant selected peer"),
         Line::from("n send note to selected peer"),
         Line::from("t send summary task"),
@@ -2068,7 +2140,7 @@ fn render_help(frame: &mut Frame, area: Rect, _app: &DashboardApp) {
         Line::from(""),
         Line::from("Overview: node, reachability, peer preview, and alerts"),
         Line::from("Peers: full list and selected peer detail"),
-        Line::from("Topics: public lanes and subscription hints"),
+        Line::from("Topics: global public channels, owners, and member counts"),
         Line::from("Requests: pending delegate approvals"),
         Line::from("Messages: inbox / outbox with body detail"),
         Line::from("Actions: guided operator actions"),

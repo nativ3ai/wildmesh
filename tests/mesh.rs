@@ -8,12 +8,14 @@ use agentmesh::models::{
 use agentmesh::service::MeshService;
 use agentmesh::storage;
 use chrono::Utc;
+use serial_test::serial;
 use std::net::TcpListener;
 
 use tempfile::tempdir;
 use tokio::time::{Duration, sleep};
 
 #[tokio::test]
+#[serial]
 async fn config_defaults_to_libp2p_bootstrap_peers() {
     let dir = tempdir().expect("tempdir");
     let cfg = AgentMeshConfig::load_or_create(dir.path()).expect("config");
@@ -26,6 +28,7 @@ async fn config_defaults_to_libp2p_bootstrap_peers() {
 }
 
 #[tokio::test]
+#[serial]
 async fn peer_storage_roundtrip_preserves_profile_metadata() {
     let dir = tempdir().expect("tempdir");
     let db_path = PathBuf::from(dir.path()).join("state.db");
@@ -72,6 +75,7 @@ async fn peer_storage_roundtrip_preserves_profile_metadata() {
 }
 
 #[tokio::test]
+#[serial]
 async fn message_storage_roundtrip_keeps_status_and_kind() {
     let dir = tempdir().expect("tempdir");
     let db_path = PathBuf::from(dir.path()).join("state.db");
@@ -101,6 +105,110 @@ async fn message_storage_roundtrip_keeps_status_and_kind() {
 }
 
 #[tokio::test]
+#[serial]
+async fn channels_are_globally_visible_and_exact_names_are_unique() {
+    let topic = format!("HermesColab-{}", uuid::Uuid::new_v4().simple());
+    let dir = tempdir().expect("tempdir");
+    let home_a = dir.path().join("channel-a");
+    let home_b = dir.path().join("channel-b");
+    let control_port_a = free_port();
+    let control_port_b = free_port();
+    let p2p_port_a = free_port();
+    let p2p_port_b = free_port();
+    let config_a = AgentMeshConfig {
+        control_port: control_port_a,
+        p2p_port: p2p_port_a,
+        advertise_host: "127.0.0.1".to_string(),
+        agent_label: Some("alpha".to_string()),
+        agent_description: Some("channel owner".to_string()),
+        interests: vec!["mesh".to_string()],
+        bootstrap_urls: Vec::new(),
+        ..AgentMeshConfig::default()
+    };
+    let config_b = AgentMeshConfig {
+        control_port: control_port_b,
+        p2p_port: p2p_port_b,
+        advertise_host: "127.0.0.1".to_string(),
+        agent_label: Some("beta".to_string()),
+        agent_description: Some("channel observer".to_string()),
+        interests: vec!["mesh".to_string()],
+        bootstrap_urls: Vec::new(),
+        ..AgentMeshConfig::default()
+    };
+    let service_a = MeshService::bootstrap(&home_a, config_a)
+        .await
+        .expect("bootstrap a");
+    let service_b = MeshService::bootstrap(&home_b, config_b)
+        .await
+        .expect("bootstrap b");
+    service_a
+        .announce_to(Some(("127.0.0.1".to_string(), p2p_port_b)))
+        .await
+        .expect("dial b");
+    service_b
+        .announce_to(Some(("127.0.0.1".to_string(), p2p_port_a)))
+        .await
+        .expect("dial a");
+
+    wait_for("peer discovery", || async {
+        let peers_a = service_a.list_peers().await.expect("peers a");
+        let peers_b = service_b.list_peers().await.expect("peers b");
+        peers_a
+            .iter()
+            .any(|peer| peer.agent_label.as_deref() == Some("beta"))
+            && peers_b
+                .iter()
+                .any(|peer| peer.agent_label.as_deref() == Some("alpha"))
+    })
+    .await;
+
+    let created = service_a
+        .create_channel(&topic)
+        .await
+        .expect("create channel");
+    assert!(created.created);
+    assert_eq!(created.channel.topic, topic);
+    assert!(created.channel.local_subscribed);
+
+    wait_for("channel propagation", || async {
+        service_b
+            .list_topics()
+            .await
+            .expect("topics b")
+            .iter()
+            .any(|item| item.topic == topic)
+    })
+    .await;
+
+    let visible = service_b.list_topics().await.expect("topics b");
+    let topic = visible
+        .iter()
+        .find(|item| item.topic == topic)
+        .expect("channel visible");
+    assert_eq!(topic.owner_agent_label.as_deref(), Some("alpha"));
+    assert_eq!(topic.peer_count, 1);
+
+    let duplicate = service_b.create_channel(&topic.topic).await;
+    assert!(duplicate.is_err());
+
+    let joined = service_b.subscribe(&topic.topic).await.expect("join existing");
+    assert_eq!(joined.topic, topic.topic);
+
+    wait_for("channel membership propagation", || async {
+        service_a
+            .list_topics()
+            .await
+            .expect("topics a")
+            .iter()
+            .find(|item| item.topic == topic.topic)
+            .map(|item| item.peer_count >= 2)
+            .unwrap_or(false)
+    })
+    .await;
+}
+
+#[tokio::test]
+#[serial]
 async fn two_nodes_can_share_context_delegate_and_exchange_artifacts() {
     let dir = tempdir().expect("tempdir");
     let home_a = dir.path().join("node-a");
@@ -312,6 +420,7 @@ async fn two_nodes_can_share_context_delegate_and_exchange_artifacts() {
 }
 
 #[tokio::test]
+#[serial]
 async fn delegated_work_can_wait_for_manual_approval() {
     let dir = tempdir().expect("tempdir");
     let home_a = dir.path().join("manual-a");
@@ -451,6 +560,7 @@ async fn delegated_work_can_wait_for_manual_approval() {
 }
 
 #[tokio::test]
+#[serial]
 async fn delegated_work_can_be_trusted_from_the_pending_queue() {
     let dir = tempdir().expect("tempdir");
     let home_a = dir.path().join("trust-a");

@@ -13,8 +13,10 @@ from .tools import (
     mesh_fetch_inbox,
     mesh_deny_request,
     mesh_grant_capability,
+    mesh_create_channel,
     mesh_list_grants,
     mesh_list_artifacts,
+    mesh_list_channels,
     mesh_list_pending_requests,
     mesh_list_peers,
     mesh_latest_delegate_result,
@@ -49,6 +51,7 @@ def register(ctx) -> None:
                     "p2p_port": {"type": "integer"},
                     "advertise_host": {"type": "string"},
                     "bootstrap_urls": {"type": "array", "items": {"type": "string"}},
+                    "local_only": {"type": "boolean"},
                     "cooperate": {"type": "boolean"},
                     "executor_mode": {"type": "string"},
                     "executor_url": {"type": "string"},
@@ -229,11 +232,32 @@ def register(ctx) -> None:
         emoji="🚫",
     )
     ctx.register_tool(
+        name="wildmesh_create_channel",
+        toolset=TOOLSET,
+        schema={
+            "name": "wildmesh_create_channel",
+            "description": "Create a new public Wildmesh channel with an exact name. If the channel already exists globally, this fails and the node should join it instead of trying to recreate it.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "topic": {"type": "string"}
+                },
+                "required": ["topic"],
+                "additionalProperties": False,
+            },
+        },
+        handler=mesh_create_channel,
+        check_fn=check_agentmesh_available,
+        is_async=False,
+        description="Create a new globally visible public channel and join it locally.",
+        emoji="🪧",
+    )
+    ctx.register_tool(
         name="wildmesh_subscribe_topic",
         toolset=TOOLSET,
         schema={
             "name": "wildmesh_subscribe_topic",
-            "description": "Subscribe the local node to a public Wildmesh topic so peers can discover interest and send broadcasts.",
+            "description": "Join an existing public Wildmesh channel/topic so this node can read broadcasts and participate there.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -248,6 +272,16 @@ def register(ctx) -> None:
         is_async=False,
         description="Subscribe the local node to a topic.",
         emoji="📣",
+    )
+    ctx.register_tool(
+        name="wildmesh_list_channels",
+        toolset=TOOLSET,
+        schema={"name": "wildmesh_list_channels", "description": "List globally visible Wildmesh channels known to this node, including owner and members.", "parameters": {"type": "object", "properties": {}, "additionalProperties": False}},
+        handler=mesh_list_channels,
+        check_fn=check_agentmesh_available,
+        is_async=False,
+        description="List globally visible public channels.",
+        emoji="🛰️",
     )
     ctx.register_tool(
         name="wildmesh_list_subscriptions",

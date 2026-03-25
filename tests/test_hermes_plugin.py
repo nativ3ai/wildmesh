@@ -15,6 +15,7 @@ class _ClientStub:
         status_error: Exception | None = None,
         profile_result: dict[str, Any] | None = None,
         peers_result: list[dict[str, Any]] | None = None,
+        topics_result: list[dict[str, Any]] | None = None,
         inbox_result: list[dict[str, Any]] | None = None,
         grants_result: list[dict[str, Any]] | None = None,
     ) -> None:
@@ -22,6 +23,7 @@ class _ClientStub:
         self._status_error = status_error
         self._profile_result = profile_result or {"agent_label": "node-1"}
         self._peers_result = peers_result or []
+        self._topics_result = topics_result or []
         self._inbox_result = inbox_result or []
         self._grants_result = grants_result or []
 
@@ -41,6 +43,26 @@ class _ClientStub:
 
     def list_capabilities(self) -> list[dict[str, Any]]:
         return list(self._grants_result)
+
+    def list_topics(self) -> list[dict[str, Any]]:
+        return list(self._topics_result)
+
+    def create_channel(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "created": True,
+            "joined": {"topic": payload["topic"], "created_at": "2026-03-26T00:00:00Z"},
+            "channel": {
+                "topic": payload["topic"],
+                "owner_peer_id": "peer-1",
+                "owner_agent_label": self._profile_result.get("agent_label"),
+                "created_at": "2026-03-26T00:00:00Z",
+                "local_subscribed": True,
+                "local_joined_at": "2026-03-26T00:00:00Z",
+                "peer_count": 1,
+                "active_peer_count": 1,
+                "peers": [],
+            },
+        }
 
     def inbox(self, limit: int = 50) -> list[dict[str, Any]]:
         return list(self._inbox_result)[:limit]
@@ -238,6 +260,34 @@ def test_mesh_fetch_inbox_surfaces_latest_delegate_result(monkeypatch):
     assert result["latest_delegate_result"]["task_id"] == "task-2"
     assert result["delegate_results"][0]["output"] == "inline output"
     assert "task_id is not an artifact id" in result["note"]
+
+
+def test_mesh_create_and_list_channels(monkeypatch):
+    monkeypatch.setattr(
+        tools,
+        "_client",
+        lambda: _ClientStub(
+            profile_result={"agent_label": "node-1"},
+            topics_result=[
+                {
+                    "topic": "HermesColab",
+                    "owner_peer_id": "peer-1",
+                    "owner_agent_label": "node-1",
+                    "created_at": "2026-03-26T00:00:00Z",
+                    "local_subscribed": True,
+                    "local_joined_at": "2026-03-26T00:00:00Z",
+                    "peer_count": 1,
+                    "active_peer_count": 1,
+                    "peers": [],
+                }
+            ],
+        ),
+    )
+    created = json.loads(tools.mesh_create_channel({"topic": "HermesColab"}))
+    listed = json.loads(tools.mesh_list_channels())
+    assert created["created"] is True
+    assert created["channel"]["topic"] == "HermesColab"
+    assert listed["items"][0]["topic"] == "HermesColab"
 
 
 def test_mesh_whitelist_status_detects_delegate_trust(monkeypatch):

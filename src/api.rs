@@ -10,9 +10,9 @@ use tracing::info;
 use crate::models::{
     AddPeerRequest, ArtifactFetchRequest, ArtifactOfferRequest, ArtifactRecord, BroadcastRequest,
     BroadcastResponse, CapabilityGrant, ContextCapsuleRequest, DelegateDecisionRequest,
-    DelegateDecisionResponse, DelegateWorkRequest, DiscoveryAnnounceRequest, GrantRequest,
-    PeerRecord, PendingDelegateRequest, RevokeGrantRequest, SendMessageRequest, SubscribeRequest,
-    SubscriptionRecord,
+    CreateChannelRequest, CreateChannelResponse, DelegateDecisionResponse, DelegateWorkRequest,
+    DiscoveryAnnounceRequest, GrantRequest, PeerRecord, PendingDelegateRequest,
+    RevokeGrantRequest, SendMessageRequest, SubscribeRequest, SubscriptionRecord, TopicView,
 };
 use crate::service::MeshService;
 
@@ -28,6 +28,7 @@ pub fn router(service: MeshService) -> Router {
         .route("/v1/capabilities", get(list_grants))
         .route("/v1/capabilities/grants", post(grant))
         .route("/v1/capabilities/revoke", post(revoke_grant))
+        .route("/v1/topics", get(list_topics).post(create_channel))
         .route("/v1/subscriptions", get(list_subscriptions).post(subscribe))
         .route("/v1/messages/send", post(send_message))
         .route("/v1/messages/broadcast", post(broadcast))
@@ -179,6 +180,27 @@ async fn subscribe(
 ) -> Result<Json<SubscriptionRecord>, (axum::http::StatusCode, String)> {
     service
         .subscribe(&payload.topic)
+        .await
+        .map(Json)
+        .map_err(|err| (axum::http::StatusCode::BAD_REQUEST, err.to_string()))
+}
+
+async fn list_topics(
+    State(service): State<MeshService>,
+) -> Result<Json<Vec<TopicView>>, axum::http::StatusCode> {
+    service
+        .list_topics()
+        .await
+        .map(Json)
+        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+async fn create_channel(
+    State(service): State<MeshService>,
+    Json(payload): Json<CreateChannelRequest>,
+) -> Result<Json<CreateChannelResponse>, (axum::http::StatusCode, String)> {
+    service
+        .create_channel(&payload.topic)
         .await
         .map(Json)
         .map_err(|err| (axum::http::StatusCode::BAD_REQUEST, err.to_string()))

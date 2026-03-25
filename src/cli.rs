@@ -43,6 +43,8 @@ pub enum Commands {
         #[arg(long = "bootstrap-url")]
         bootstrap_urls: Vec<String>,
         #[arg(long, default_value_t = false, action = ArgAction::SetTrue)]
+        local_only: bool,
+        #[arg(long, default_value_t = false, action = ArgAction::SetTrue)]
         cooperate: bool,
         #[arg(long, default_value = "disabled")]
         executor_mode: String,
@@ -86,6 +88,8 @@ pub enum Commands {
         public_api_host: String,
         #[arg(long = "bootstrap-url")]
         bootstrap_urls: Vec<String>,
+        #[arg(long, default_value_t = false, action = ArgAction::SetTrue)]
+        local_only: bool,
         #[arg(long, default_value_t = 30)]
         announce_interval_secs: u64,
         #[arg(long, default_value_t = 5)]
@@ -199,6 +203,11 @@ pub enum Commands {
         #[arg(long)]
         home: Option<PathBuf>,
     },
+    CreateChannel {
+        topic: String,
+        #[arg(long)]
+        home: Option<PathBuf>,
+    },
     Cooperate {
         #[arg(long)]
         home: Option<PathBuf>,
@@ -216,6 +225,10 @@ pub enum Commands {
         executor_api_key_env: Option<String>,
     },
     Subscriptions {
+        #[arg(long)]
+        home: Option<PathBuf>,
+    },
+    Channels {
         #[arg(long)]
         home: Option<PathBuf>,
     },
@@ -406,6 +419,7 @@ pub async fn main_entry() -> Result<()> {
             agent_description,
             interests,
             bootstrap_urls,
+            local_only,
             cooperate,
             executor_mode,
             executor_url,
@@ -437,7 +451,10 @@ pub async fn main_entry() -> Result<()> {
             if !interests.is_empty() {
                 config.interests = interests;
             }
-            if !bootstrap_urls.is_empty() {
+            config.local_only = local_only;
+            if local_only {
+                config.bootstrap_urls = Vec::new();
+            } else if !bootstrap_urls.is_empty() {
                 config.bootstrap_urls = bootstrap_urls;
             } else if config.bootstrap_urls.is_empty() {
                 config.bootstrap_urls = AgentMeshConfig::default_bootstrap_urls();
@@ -531,6 +548,7 @@ pub async fn main_entry() -> Result<()> {
             public_api_port,
             public_api_host,
             bootstrap_urls,
+            local_only,
             announce_interval_secs,
             relay_poll_interval_secs,
             direct_connect_timeout_secs,
@@ -542,7 +560,9 @@ pub async fn main_entry() -> Result<()> {
             executor_api_key_env,
         } => {
             let home = home.unwrap_or_else(AgentMeshConfig::home_dir);
-            let bootstrap_urls = if bootstrap_urls.is_empty() {
+            let bootstrap_urls = if local_only {
+                Vec::new()
+            } else if bootstrap_urls.is_empty() {
                 AgentMeshConfig::default_bootstrap_urls()
             } else {
                 bootstrap_urls
@@ -561,6 +581,7 @@ pub async fn main_entry() -> Result<()> {
                 discovery_broadcast_addr,
                 public_api_host,
                 public_api_port: 45200,
+                local_only,
                 bootstrap_urls,
                 announce_interval_secs,
                 relay_poll_interval_secs,
@@ -647,6 +668,8 @@ pub async fn main_entry() -> Result<()> {
                 "control_url": cfg.control_url(),
                 "p2p_endpoint": cfg.p2p_endpoint(),
                 "public_api_url": cfg.public_api_url(),
+                "local_only": cfg.local_only,
+                "network_scope": if cfg.local_only { "local_only" } else { "global" },
                 "bootstrap_urls": cfg.bootstrap_urls,
                 "collaboration": {
                     "cooperate_enabled": cfg.cooperate_enabled,
@@ -735,6 +758,8 @@ pub async fn main_entry() -> Result<()> {
                     "control_url": cfg.control_url(),
                     "p2p_endpoint": cfg.p2p_endpoint(),
                     "public_api_url": cfg.public_api_url(),
+                    "local_only": cfg.local_only,
+                    "network_scope": if cfg.local_only { "local_only" } else { "global" },
                     "bootstrap_urls": cfg.bootstrap_urls,
                 }))
             );
@@ -839,6 +864,13 @@ pub async fn main_entry() -> Result<()> {
                 )?
             );
         }
+        Commands::CreateChannel { topic, home } => {
+            let payload = json!({ "topic": topic });
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&post_json(home, "/v1/topics", &payload).await?)?
+            );
+        }
         Commands::Cooperate {
             home,
             enable,
@@ -889,6 +921,12 @@ pub async fn main_entry() -> Result<()> {
             println!(
                 "{}",
                 serde_json::to_string_pretty(&get_json(home, "/v1/subscriptions").await?)?
+            );
+        }
+        Commands::Channels { home } => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&get_json(home, "/v1/topics").await?)?
             );
         }
         Commands::ContextSend {
@@ -1344,6 +1382,10 @@ fn render_profile(profile: &Value) -> String {
         })
         .filter(|joined| !joined.is_empty())
         .unwrap_or_else(|| "<none>".to_string());
+    let network_scope = profile
+        .get("network_scope")
+        .and_then(Value::as_str)
+        .unwrap_or("global");
     let nat_status = profile
         .get("nat_status")
         .and_then(Value::as_str)
@@ -1365,7 +1407,7 @@ fn render_profile(profile: &Value) -> String {
         .and_then(Value::as_str)
         .unwrap_or("disabled");
     format!(
-        "agent_label: {label}\nagent_description: {description}\ninterests: {interests}\ncontrol_url: {}\np2p_endpoint: {}\npublic_api_url: {}\nbootstrap_urls: {bootstrap_urls}\nnat_status: {nat_status}\npublic_address: {public_address}\ncooperate_enabled: {cooperate_enabled}\nexecutor_mode: {executor_mode}",
+        "agent_label: {label}\nagent_description: {description}\ninterests: {interests}\nnetwork_scope: {network_scope}\ncontrol_url: {}\np2p_endpoint: {}\npublic_api_url: {}\nbootstrap_urls: {bootstrap_urls}\nnat_status: {nat_status}\npublic_address: {public_address}\ncooperate_enabled: {cooperate_enabled}\nexecutor_mode: {executor_mode}",
         profile
             .get("control_url")
             .and_then(Value::as_str)
@@ -1683,6 +1725,8 @@ async fn run_sidecar(home: Option<PathBuf>) -> Result<()> {
                     "control_url": cfg.control_url(),
                     "p2p_endpoint": cfg.p2p_endpoint(),
                     "public_api_url": cfg.public_api_url(),
+                    "local_only": cfg.local_only,
+                    "network_scope": if cfg.local_only { "local_only" } else { "global" },
                     "bootstrap_urls": cfg.bootstrap_urls,
                     "collaboration": {
                         "cooperate_enabled": cfg.cooperate_enabled,
@@ -1844,8 +1888,21 @@ async fn run_sidecar(home: Option<PathBuf>) -> Result<()> {
                     .json::<Value>()
                     .await?
             }
+            Some("create_channel") => {
+                client
+                    .post(format!("{base}/v1/topics"))
+                    .json(&value["payload"])
+                    .send()
+                    .await?
+                    .error_for_status()?
+                    .json::<Value>()
+                    .await?
+            }
             Some("list_subscriptions") => {
                 json!({"items": client.get(format!("{base}/v1/subscriptions")).send().await?.error_for_status()?.json::<Value>().await?})
+            }
+            Some("list_channels") => {
+                json!({"items": client.get(format!("{base}/v1/topics")).send().await?.error_for_status()?.json::<Value>().await?})
             }
             Some("send_context") => {
                 client

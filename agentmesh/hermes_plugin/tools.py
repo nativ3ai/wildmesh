@@ -309,6 +309,7 @@ def mesh_setup(args: dict[str, Any] | None = None, **_meta: Any) -> str:
     interests = payload.get("interests") or cfg.interests or []
     if isinstance(interests, str):
         interests = [interests]
+    local_only = bool(payload.get("local_only", getattr(cfg, "local_only", False)))
     command = [
         binary,
         "setup",
@@ -329,8 +330,11 @@ def mesh_setup(args: dict[str, Any] | None = None, **_meta: Any) -> str:
         command.extend(["--advertise-host", str(payload["advertise_host"])])
     for interest in interests:
         command.extend(["--interest", str(interest)])
-    for bootstrap_url in payload.get("bootstrap_urls") or []:
-        command.extend(["--bootstrap-url", str(bootstrap_url)])
+    if local_only:
+        command.append("--local-only")
+    else:
+        for bootstrap_url in payload.get("bootstrap_urls") or []:
+            command.extend(["--bootstrap-url", str(bootstrap_url)])
     if payload.get("cooperate") or cfg.cooperate_enabled:
         command.append("--cooperate")
     executor_mode = payload.get("executor_mode") or cfg.executor_mode
@@ -523,10 +527,26 @@ def mesh_subscribe_topic(args: dict[str, Any] | None = None, **_meta: Any) -> st
         client.close()
 
 
+def mesh_create_channel(args: dict[str, Any] | None = None, **_meta: Any) -> str:
+    client = _client()
+    try:
+        return _json_result(client.create_channel(_normalize_args(args)))
+    finally:
+        client.close()
+
+
 def mesh_list_subscriptions(_args: dict[str, Any] | None = None, **_meta: Any) -> str:
     client = _client()
     try:
         return _json_result({"items": client.list_subscriptions()})
+    finally:
+        client.close()
+
+
+def mesh_list_channels(_args: dict[str, Any] | None = None, **_meta: Any) -> str:
+    client = _client()
+    try:
+        return _json_result({"items": client.list_topics()})
     finally:
         client.close()
 

@@ -28,6 +28,7 @@ pub struct AgentMeshConfig {
     pub discovery_broadcast_addr: String,
     pub public_api_host: String,
     pub public_api_port: u16,
+    pub local_only: bool,
     pub bootstrap_urls: Vec<String>,
     pub relay_poll_interval_secs: u64,
     pub announce_interval_secs: u64,
@@ -58,6 +59,7 @@ impl Default for AgentMeshConfig {
             discovery_broadcast_addr: "255.255.255.255".to_string(),
             public_api_host: "0.0.0.0".to_string(),
             public_api_port: 45200,
+            local_only: false,
             bootstrap_urls: Self::default_bootstrap_urls(),
             relay_poll_interval_secs: 5,
             announce_interval_secs: 30,
@@ -145,7 +147,7 @@ impl AgentMeshConfig {
             std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
         let mut cfg: Self =
             serde_json::from_str(&raw).with_context(|| format!("parse {}", path.display()))?;
-        if cfg.bootstrap_urls.is_empty() {
+        if !cfg.local_only && cfg.bootstrap_urls.is_empty() {
             cfg.bootstrap_urls = Self::default_bootstrap_urls();
         }
         Ok(cfg)

@@ -11,11 +11,12 @@ use crate::crypto::{IdentityMaterial, encrypt_for_peer, sign_payload};
 use crate::executor;
 use crate::models::{
     ArtifactFetchBody, ArtifactFetchRequest, ArtifactOfferBody, ArtifactOfferRequest,
-    ArtifactRecord, BroadcastRequest, BroadcastResponse, CapabilityGrant, CollaborationView,
-    ContextCapsuleBody, ContextCapsuleRequest, CooperateConfigRequest, DelegateDecisionRequest,
-    DelegateDecisionResponse, DelegateRequestBody, DelegateWorkRequest, Envelope, IdentityView,
-    LocalProfile, MessageKind, PendingDelegateRequest, PeerRecord, SendMessageRequest,
-    SendMessageResponse, StatusResponse, StoredMessage, SubscriptionRecord,
+    ArtifactRecord, BroadcastRequest, BroadcastResponse, CapabilityGrant, ChannelRecord,
+    CollaborationView, ContextCapsuleBody, ContextCapsuleRequest, CooperateConfigRequest,
+    CreateChannelResponse, DelegateDecisionRequest, DelegateDecisionResponse, DelegateRequestBody,
+    DelegateWorkRequest, Envelope, IdentityView, LocalProfile, MessageKind,
+    PendingDelegateRequest, PeerRecord, SendMessageRequest, SendMessageResponse, StatusResponse,
+    StoredMessage, SubscriptionRecord, TopicMember, TopicView,
 };
 use crate::storage::{self, IdentityRow};
 use crate::swarm::{SwarmHandle, spawn_swarm};
@@ -81,6 +82,12 @@ impl MeshService {
             control_url: self.config.control_url(),
             p2p_endpoint: self.config.p2p_endpoint(),
             public_api_url: self.config.public_api_url(),
+            local_only: self.config.local_only,
+            network_scope: if self.config.local_only {
+                "local_only".to_string()
+            } else {
+                "global".to_string()
+            },
             bootstrap_urls: self.config.bootstrap_urls.clone(),
             nat_status: reachability.nat_status,
             public_address: reachability.public_address,
@@ -184,6 +191,131 @@ impl MeshService {
 
     pub async fn list_subscriptions(&self) -> Result<Vec<SubscriptionRecord>> {
         storage::list_subscriptions(&self.pool).await
+    }
+
+    pub async fn list_topics(&self) -> Result<Vec<TopicView>> {
+        let local_subscriptions = storage::list_subscriptions(&self.pool).await?;
+        let channels = storage::list_channels(&self.pool).await?;
+        let topic_links = storage::list_peer_topic_links(&self.pool).await?;
+        let visible_peers = self
+            .list_peers()
+            .await?
+            .into_iter()
+            .map(|peer| (peer.peer_id.clone(), peer))
+            .collect::<std::collections::HashMap<_, _>>();
+        let local_index = local_subscriptions
+            .iter()
+            .map(|subscription| (subscription.topic.clone(), subscription.created_at))
+            .collect::<std::collections::HashMap<_, _>>();
+
+        let mut views = channels
+            .into_iter()
+            .map(|channel| {
+                let joined_at = local_index.get(&channel.topic).copied();
+                (
+                    channel.topic.clone(),
+                    TopicView {
+                        topic: channel.topic,
+                        owner_peer_id: channel.owner_peer_id,
+                        owner_agent_label: channel.owner_agent_label,
+                        created_at: channel.created_at,
+                        local_subscribed: joined_at.is_some(),
+                        local_joined_at: joined_at,
+                        peer_count: 0,
+                        active_peer_count: 0,
+                        peers: Vec::new(),
+                    },
+                )
+            })
+            .collect::<std::collections::HashMap<_, _>>();
+
+        for (peer_id, topic) in topic_links {
+            let Some(channel) = views.get_mut(&topic) else {
+                continue;
+            };
+            let Some(peer) = visible_peers.get(&peer_id) else {
+                continue;
+            };
+            channel.peer_count += 1;
+            if peer.activity_state.as_deref() == Some("active") {
+                channel.active_peer_count += 1;
+            }
+            channel.peers.push(TopicMember {
+                peer_id: peer.peer_id.clone(),
+                peer_label: peer.label.clone(),
+                agent_label: peer.agent_label.clone(),
+                agent_description: peer.agent_description.clone(),
+                activity_state: peer.activity_state.clone(),
+                host: peer.host.clone(),
+                port: peer.port,
+            });
+        }
+
+        for channel in views.values_mut() {
+            if channel.local_subscribed {
+                channel.peer_count += 1;
+                channel.active_peer_count += 1;
+                channel.peers.push(TopicMember {
+                    peer_id: self.identity.peer_id(),
+                    peer_label: None,
+                    agent_label: self.config.agent_label.clone(),
+                    agent_description: self.config.agent_description.clone(),
+                    activity_state: Some("active".to_string()),
+                    host: self.config.advertise_host.clone(),
+                    port: self.config.p2p_port,
+                });
+            }
+        }
+
+        let mut items = views.into_values().collect::<Vec<_>>();
+        items.sort_by(|left, right| left.topic.cmp(&right.topic));
+        Ok(items)
+    }
+
+    pub async fn create_channel(&self, topic: &str) -> Result<CreateChannelResponse> {
+        let topic = topic.trim();
+        if topic.is_empty() {
+            bail!("topic must not be empty");
+        }
+        let existing = storage::get_channel(&self.pool, topic).await?;
+        let created = match &existing {
+            Some(channel) if channel.owner_peer_id != self.identity.peer_id() => {
+                bail!(
+                    "channel already exists: {} (owner {})",
+                    channel.topic,
+                    channel
+                        .owner_agent_label
+                        .clone()
+                        .unwrap_or_else(|| channel.owner_peer_id.clone())
+                );
+            }
+            Some(_) => false,
+            None => {
+                storage::upsert_channel(
+                    &self.pool,
+                    &ChannelRecord {
+                        topic: topic.to_string(),
+                        owner_peer_id: self.identity.peer_id(),
+                        owner_agent_label: self.config.agent_label.clone(),
+                        created_at: Utc::now(),
+                    },
+                )
+                .await?;
+                true
+            }
+        };
+        let joined = self.subscribe(topic).await?;
+        let channel = self
+            .list_topics()
+            .await?
+            .into_iter()
+            .find(|item| item.topic == topic)
+            .ok_or_else(|| anyhow!("channel created but not visible in local topic registry"))?;
+        Ok(CreateChannelResponse {
+            created,
+            joined,
+            channel,
+        })
     }
 
     pub async fn list_inbox(&self, limit: i64) -> Result<Vec<StoredMessage>> {
@@ -446,6 +578,12 @@ pub async fn initialize_home(home: &Path, config: &AgentMeshConfig) -> Result<Lo
         control_url: config.control_url(),
         p2p_endpoint: config.p2p_endpoint(),
         public_api_url: config.public_api_url(),
+        local_only: config.local_only,
+        network_scope: if config.local_only {
+            "local_only".to_string()
+        } else {
+            "global".to_string()
+        },
         bootstrap_urls: config.bootstrap_urls.clone(),
         nat_status: "unknown".to_string(),
         public_address: None,

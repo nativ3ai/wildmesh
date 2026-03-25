@@ -199,6 +199,56 @@ pub struct SubscriptionRecord {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TopicMember {
+    pub peer_id: String,
+    pub peer_label: Option<String>,
+    pub agent_label: Option<String>,
+    pub agent_description: Option<String>,
+    pub activity_state: Option<String>,
+    pub host: String,
+    pub port: u16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TopicView {
+    pub topic: String,
+    pub owner_peer_id: String,
+    pub owner_agent_label: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub local_subscribed: bool,
+    pub local_joined_at: Option<DateTime<Utc>>,
+    pub peer_count: usize,
+    pub active_peer_count: usize,
+    pub peers: Vec<TopicMember>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OwnedChannelRecord {
+    pub topic: String,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChannelRecord {
+    pub topic: String,
+    pub owner_peer_id: String,
+    pub owner_agent_label: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateChannelRequest {
+    pub topic: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateChannelResponse {
+    pub created: bool,
+    pub joined: SubscriptionRecord,
+    pub channel: TopicView,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CollaborationView {
     pub cooperate_enabled: bool,
     pub executor_mode: String,
@@ -317,6 +367,8 @@ pub struct LocalProfile {
     pub control_url: String,
     pub p2p_endpoint: String,
     pub public_api_url: String,
+    pub local_only: bool,
+    pub network_scope: String,
     pub bootstrap_urls: Vec<String>,
     pub nat_status: String,
     pub public_address: Option<String>,
@@ -328,6 +380,7 @@ pub struct MeshProfileRecord {
     pub transport_peer_id: String,
     pub peer: PeerRecord,
     pub subscriptions: Vec<String>,
+    pub channels: Vec<OwnedChannelRecord>,
     pub listen_addrs: Vec<String>,
 }
 

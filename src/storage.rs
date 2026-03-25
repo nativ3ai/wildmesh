@@ -6,8 +6,9 @@ use std::path::Path;
 use std::str::FromStr;
 
 use crate::models::{
-    CapabilityGrant, Envelope, HubAnnouncement, HubPeerRecord, MessageDirection, MessageKind,
-    MessageStatus, PendingDelegateRequest, PeerRecord, StoredMessage, SubscriptionRecord,
+    CapabilityGrant, ChannelRecord, Envelope, HubAnnouncement, HubPeerRecord, MessageDirection,
+    MessageKind, MessageStatus, OwnedChannelRecord, PendingDelegateRequest, PeerRecord,
+    StoredMessage, SubscriptionRecord,
 };
 
 pub async fn open_pool(db_path: &Path) -> Result<SqlitePool> {
@@ -67,6 +68,13 @@ async fn init_schema(pool: &SqlitePool) -> Result<()> {
 
         CREATE TABLE IF NOT EXISTS subscriptions (
             topic TEXT PRIMARY KEY,
+            created_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS channels (
+            topic TEXT PRIMARY KEY,
+            owner_peer_id TEXT NOT NULL,
+            owner_agent_label TEXT,
             created_at TEXT NOT NULL
         );
 
@@ -340,6 +348,93 @@ pub async fn list_subscriptions(pool: &SqlitePool) -> Result<Vec<SubscriptionRec
         .collect()
 }
 
+pub async fn get_channel(pool: &SqlitePool, topic: &str) -> Result<Option<ChannelRecord>> {
+    let row = sqlx::query("SELECT topic, owner_peer_id, owner_agent_label, created_at FROM channels WHERE topic = ?")
+        .bind(topic)
+        .fetch_optional(pool)
+        .await?;
+    row.map(|row| {
+        Ok(ChannelRecord {
+            topic: row.get("topic"),
+            owner_peer_id: row.get("owner_peer_id"),
+            owner_agent_label: row.get("owner_agent_label"),
+            created_at: parse_datetime(&row.get::<String, _>("created_at"))?,
+        })
+    })
+    .transpose()
+}
+
+pub async fn upsert_channel(pool: &SqlitePool, channel: &ChannelRecord) -> Result<()> {
+    sqlx::query(
+        r#"
+        INSERT INTO channels (topic, owner_peer_id, owner_agent_label, created_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(topic) DO UPDATE SET
+            owner_agent_label=excluded.owner_agent_label,
+            created_at=excluded.created_at
+        WHERE channels.owner_peer_id = excluded.owner_peer_id
+        "#,
+    )
+    .bind(&channel.topic)
+    .bind(&channel.owner_peer_id)
+    .bind(&channel.owner_agent_label)
+    .bind(channel.created_at.to_rfc3339())
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn replace_owned_channels(
+    pool: &SqlitePool,
+    owner_peer_id: &str,
+    owner_agent_label: Option<&str>,
+    channels: &[OwnedChannelRecord],
+) -> Result<()> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("DELETE FROM channels WHERE owner_peer_id = ?")
+        .bind(owner_peer_id)
+        .execute(&mut *tx)
+        .await?;
+    for channel in channels {
+        sqlx::query(
+            r#"
+            INSERT INTO channels (topic, owner_peer_id, owner_agent_label, created_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(topic) DO UPDATE SET
+                owner_agent_label=excluded.owner_agent_label,
+                created_at=excluded.created_at
+            WHERE channels.owner_peer_id = excluded.owner_peer_id
+            "#,
+        )
+        .bind(&channel.topic)
+        .bind(owner_peer_id)
+        .bind(owner_agent_label)
+        .bind(channel.created_at.to_rfc3339())
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
+pub async fn list_channels(pool: &SqlitePool) -> Result<Vec<ChannelRecord>> {
+    let rows = sqlx::query(
+        "SELECT topic, owner_peer_id, owner_agent_label, created_at FROM channels ORDER BY created_at ASC, topic",
+    )
+    .fetch_all(pool)
+    .await?;
+    rows.iter()
+        .map(|row| {
+            Ok(ChannelRecord {
+                topic: row.get("topic"),
+                owner_peer_id: row.get("owner_peer_id"),
+                owner_agent_label: row.get("owner_agent_label"),
+                created_at: parse_datetime(&row.get::<String, _>("created_at"))?,
+            })
+        })
+        .collect()
+}
+
 pub async fn replace_peer_topics(
     pool: &SqlitePool,
     peer_id: &str,
@@ -361,6 +456,16 @@ pub async fn replace_peer_topics(
     }
     tx.commit().await?;
     Ok(())
+}
+
+pub async fn list_peer_topic_links(pool: &SqlitePool) -> Result<Vec<(String, String)>> {
+    let rows = sqlx::query("SELECT peer_id, topic FROM peer_topics ORDER BY topic, peer_id")
+        .fetch_all(pool)
+        .await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| (row.get("peer_id"), row.get("topic")))
+        .collect())
 }
 
 pub async fn list_peers_by_topic(pool: &SqlitePool, topic: &str) -> Result<Vec<PeerRecord>> {

@@ -52,6 +52,7 @@ class AgentMeshConfig:
     discovery_broadcast_addr: str = "255.255.255.255"
     public_api_host: str = "0.0.0.0"
     public_api_port: int = 45200
+    local_only: bool = False
     bootstrap_urls: list[str] | None = None
     relay_poll_interval_secs: int = 5
     announce_interval_secs: int = 30
@@ -99,7 +100,8 @@ class AgentMeshConfig:
                     "discovery_broadcast_addr": self.discovery_broadcast_addr,
                     "public_api_host": self.public_api_host,
                     "public_api_port": self.public_api_port,
-                    "bootstrap_urls": self.bootstrap_urls or DEFAULT_BOOTSTRAP_PEERS,
+                    "local_only": self.local_only,
+                    "bootstrap_urls": [] if self.local_only else (self.bootstrap_urls or DEFAULT_BOOTSTRAP_PEERS),
                     "relay_poll_interval_secs": self.relay_poll_interval_secs,
                     "announce_interval_secs": self.announce_interval_secs,
                     "direct_connect_timeout_secs": self.direct_connect_timeout_secs,
@@ -135,12 +137,13 @@ def load_config(home: Path | None = None) -> AgentMeshConfig:
         cfg.persist()
         return cfg
     raw = json.loads(path.read_text())
-    if not raw.get("bootstrap_urls"):
+    raw.setdefault("local_only", False)
+    if not raw.get("bootstrap_urls") and not raw.get("local_only"):
         env_value = os.environ.get("WILDMESH_BOOTSTRAP_URLS") or os.environ.get("AGENTMESH_BOOTSTRAP_URLS")
         if env_value:
             raw["bootstrap_urls"] = [item.strip() for item in env_value.split(",") if item.strip()]
-    raw.setdefault("bootstrap_urls", DEFAULT_BOOTSTRAP_PEERS.copy())
-    if not raw.get("bootstrap_urls"):
+    raw.setdefault("bootstrap_urls", [] if raw.get("local_only") else DEFAULT_BOOTSTRAP_PEERS.copy())
+    if not raw.get("bootstrap_urls") and not raw.get("local_only"):
         raw["bootstrap_urls"] = DEFAULT_BOOTSTRAP_PEERS.copy()
     raw.setdefault("interests", [])
     raw.setdefault("cooperate_enabled", False)

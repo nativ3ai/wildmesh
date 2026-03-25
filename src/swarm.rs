@@ -594,19 +594,98 @@ async fn handle_command(
                     issued_at: Utc::now(),
                 };
                 let raw = serde_json::to_vec(&payload)?;
-                swarm
+                let peers = storage::list_peers_by_topic(&state.pool, topic).await?;
+                let publish_result = match swarm
                     .behaviour_mut()
                     .gossipsub
-                    .publish(IdentTopic::new(topic_topic(topic)), raw)?;
-                let peers = storage::list_peers_by_topic(&state.pool, topic).await?;
-                let deliveries = peers
-                    .into_iter()
-                    .map(|peer| BroadcastDelivery {
-                        peer_id: peer.peer_id,
-                        delivery_status: "published".to_string(),
-                        reason: Some("gossipsub publish accepted".to_string()),
-                    })
-                    .collect::<Vec<_>>();
+                    .publish(IdentTopic::new(topic_topic(topic)), raw)
+                {
+                    Ok(_) => Ok("gossipsub publish accepted".to_string()),
+                    Err(err) => {
+                        let text = err.to_string();
+                        if text.to_lowercase().contains("insufficient")
+                            || text.contains("NoPeersSubscribedToTopic")
+                        {
+                            Ok("no topic mesh yet; queued direct fallback".to_string())
+                        } else {
+                            Err(err)
+                        }
+                    }
+                };
+                let fallback_direct = matches!(
+                    publish_result,
+                    Ok(ref reason) if reason == "no topic mesh yet; queued direct fallback"
+                );
+                let publish_reason = publish_result.map_err(anyhow::Error::from)?;
+                let mut deliveries = Vec::new();
+                if fallback_direct {
+                    for peer in peers {
+                        let body = json!({
+                            "topic": topic,
+                            "payload": request.body.clone(),
+                            "sender_agent_label": state.config.agent_label.clone(),
+                        });
+                        let envelope = build_envelope_from_state(
+                            state,
+                            &peer,
+                            MessageKind::Broadcast,
+                            body.clone(),
+                            None,
+                        )?;
+                        let Some(transport_peer) =
+                            state.known_transport_by_app.get(&peer.peer_id).cloned()
+                        else {
+                            deliveries.push(BroadcastDelivery {
+                                peer_id: peer.peer_id,
+                                delivery_status: "unreachable".to_string(),
+                                reason: Some("channel member is not currently dialable".to_string()),
+                            });
+                            continue;
+                        };
+                        let request_id = swarm.behaviour_mut().request_response.send_request(
+                            &transport_peer,
+                            MeshDirectRequest::Envelope(envelope.clone()),
+                        );
+                        let queued = StoredMessage {
+                            id: envelope.id.clone(),
+                            direction: MessageDirection::Outbound,
+                            peer_id: envelope.recipient_peer_id.clone(),
+                            kind: envelope.kind.clone(),
+                            capability: envelope.capability.clone(),
+                            body: body.clone(),
+                            status: MessageStatus::Queued,
+                            allowed: true,
+                            reason: Some("queued for direct broadcast fallback".to_string()),
+                            created_at: envelope.issued_at,
+                            raw_envelope: serde_json::to_value(&envelope)
+                                .unwrap_or_else(|_| json!({})),
+                        };
+                        let _ = storage::save_message(&state.pool, &queued).await;
+                        let (noop_tx, _noop_rx) = oneshot::channel();
+                        state.pending_sends.insert(
+                            request_id,
+                            PendingEnvelopeSend {
+                                envelope: envelope.clone(),
+                                body,
+                                respond_to: noop_tx,
+                            },
+                        );
+                        deliveries.push(BroadcastDelivery {
+                            peer_id: peer.peer_id,
+                            delivery_status: "queued-direct".to_string(),
+                            reason: Some(publish_reason.clone()),
+                        });
+                    }
+                } else {
+                    deliveries = peers
+                        .into_iter()
+                        .map(|peer| BroadcastDelivery {
+                            peer_id: peer.peer_id,
+                            delivery_status: "published".to_string(),
+                            reason: Some(publish_reason.clone()),
+                        })
+                        .collect::<Vec<_>>();
+                }
                 Ok(BroadcastResponse {
                     topic: topic.to_string(),
                     attempted_peers: deliveries.len(),
@@ -1035,6 +1114,13 @@ async fn upsert_profile(
         Utc::now(),
     )
     .await?;
+    storage::replace_owned_channels(
+        &state.pool,
+        &peer.peer_id,
+        peer.agent_label.as_deref(),
+        &profile.channels,
+    )
+    .await?;
     Ok(())
 }
 
@@ -1051,6 +1137,13 @@ async fn upsert_profile_without_transport(
         Utc::now(),
     )
     .await?;
+    storage::replace_owned_channels(
+        &state.pool,
+        &peer.peer_id,
+        peer.agent_label.as_deref(),
+        &profile.channels,
+    )
+    .await?;
     Ok(())
 }
 
@@ -1059,6 +1152,15 @@ async fn local_profile_record(state: &RuntimeState) -> Result<MeshProfileRecord>
         .await?
         .into_iter()
         .map(|subscription| subscription.topic)
+        .collect::<Vec<_>>();
+    let channels = storage::list_channels(&state.pool)
+        .await?
+        .into_iter()
+        .filter(|channel| channel.owner_peer_id == state.identity.app_identity.peer_id())
+        .map(|channel| crate::models::OwnedChannelRecord {
+            topic: channel.topic,
+            created_at: channel.created_at,
+        })
         .collect::<Vec<_>>();
     let reachability = state
         .reachability
@@ -1092,6 +1194,7 @@ async fn local_profile_record(state: &RuntimeState) -> Result<MeshProfileRecord>
         transport_peer_id: state.identity.transport_peer_id.to_string(),
         peer,
         subscriptions,
+        channels,
         listen_addrs: if reachability.external_addrs.is_empty() {
             advertised_multiaddrs(&state.config)
         } else {
@@ -1593,6 +1696,12 @@ async fn execute_delegate_and_queue_result(
         control_url: state.config.control_url(),
         p2p_endpoint: state.config.p2p_endpoint(),
         public_api_url: state.config.public_api_url(),
+        local_only: state.config.local_only,
+        network_scope: if state.config.local_only {
+            "local_only".to_string()
+        } else {
+            "global".to_string()
+        },
         bootstrap_urls: state.config.bootstrap_urls.clone(),
         nat_status: state
             .reachability

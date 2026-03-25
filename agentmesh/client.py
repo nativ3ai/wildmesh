@@ -33,6 +33,8 @@ class AgentMeshClient:
             "control_url": cfg.control_url,
             "p2p_endpoint": cfg.p2p_endpoint,
             "public_api_url": f"http://{cfg.advertise_host}:{cfg.public_api_port}",
+            "local_only": bool(getattr(cfg, "local_only", False)),
+            "network_scope": "local_only" if bool(getattr(cfg, "local_only", False)) else "global",
             "bootstrap_urls": cfg.bootstrap_urls or [],
             "collaboration": {
                 "cooperate_enabled": cfg.cooperate_enabled,
@@ -79,6 +81,12 @@ class AgentMeshClient:
 
     def subscribe(self, payload: dict[str, Any]) -> dict[str, Any]:
         return self._client.post("/v1/subscriptions", json=payload).raise_for_status().json()
+
+    def list_topics(self) -> list[dict[str, Any]]:
+        return self._client.get("/v1/topics").raise_for_status().json()
+
+    def create_channel(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._client.post("/v1/topics", json=payload).raise_for_status().json()
 
     def send_context(self, payload: dict[str, Any]) -> dict[str, Any]:
         return self._client.post("/v1/context/send", json=payload).raise_for_status().json()

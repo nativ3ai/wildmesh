@@ -1,6 +1,6 @@
 [package]
 name = "wildmesh"
-version = "0.3.7"
+version = "0.3.8"
 edition = "2024"
 description = "Local-first peer-to-peer mesh for Hermes and other agent runtimes"
 authors = ["nativ3ai"]
@@ -44,4 +44,5 @@ uuid = { version = "1.18", features = ["v4", "serde"] }
 x25519-dalek = { version = "2.0", features = ["static_secrets", "getrandom"] }
 
 [dev-dependencies]
+serial_test = "3.2"
 tempfile = "3.23"
