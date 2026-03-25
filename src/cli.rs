@@ -184,6 +184,16 @@ pub enum Commands {
         #[arg(long)]
         home: Option<PathBuf>,
     },
+    Grants {
+        #[arg(long)]
+        home: Option<PathBuf>,
+    },
+    Revoke {
+        peer_id: String,
+        capability: String,
+        #[arg(long)]
+        home: Option<PathBuf>,
+    },
     Subscribe {
         topic: String,
         #[arg(long)]
@@ -795,6 +805,28 @@ pub async fn main_entry() -> Result<()> {
                 "{}",
                 serde_json::to_string_pretty(
                     &post_json(home, "/v1/capabilities/grants", &payload).await?
+                )?
+            );
+        }
+        Commands::Grants { home } => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&get_json(home, "/v1/capabilities").await?)?
+            );
+        }
+        Commands::Revoke {
+            peer_id,
+            capability,
+            home,
+        } => {
+            let payload = json!({
+                "peer_id": peer_id,
+                "capability": capability,
+            });
+            println!(
+                "{}",
+                serde_json::to_string_pretty(
+                    &post_json(home, "/v1/capabilities/revoke", &payload).await?
                 )?
             );
         }

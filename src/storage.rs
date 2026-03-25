@@ -298,6 +298,15 @@ pub async fn list_grants(pool: &SqlitePool) -> Result<Vec<CapabilityGrant>> {
     rows.iter().map(row_to_grant).collect()
 }
 
+pub async fn delete_grant(pool: &SqlitePool, peer_id: &str, capability: &str) -> Result<bool> {
+    let result = sqlx::query("DELETE FROM grants WHERE peer_id = ? AND capability = ?")
+        .bind(peer_id)
+        .bind(capability)
+        .execute(pool)
+        .await?;
+    Ok(result.rows_affected() > 0)
+}
+
 pub async fn upsert_subscription(
     pool: &SqlitePool,
     topic: &str,

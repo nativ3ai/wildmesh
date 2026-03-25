@@ -40,6 +40,99 @@ def _peer_index(client: AgentMeshClient) -> dict[str, dict[str, Any]]:
     }
 
 
+def _grant_index(client: AgentMeshClient) -> dict[str, list[dict[str, Any]]]:
+    try:
+        grants = client.list_capabilities()
+    except Exception:
+        return {}
+    index: dict[str, list[dict[str, Any]]] = {}
+    for grant in grants:
+        if not isinstance(grant, dict):
+            continue
+        peer_id = grant.get("peer_id")
+        if not isinstance(peer_id, str) or not peer_id.strip():
+            continue
+        index.setdefault(peer_id, []).append(grant)
+    return index
+
+
+def _decorate_peer(peer: dict[str, Any], grants: list[dict[str, Any]]) -> dict[str, Any]:
+    view = dict(peer)
+    capabilities = sorted(
+        {
+            str(grant.get("capability")).strip()
+            for grant in grants
+            if isinstance(grant.get("capability"), str) and str(grant.get("capability")).strip()
+        }
+    )
+    view["granted_capabilities"] = capabilities
+    view["whitelisted_for_delegate_work"] = "delegate_work" in capabilities
+    view["trust_note"] = next(
+        (
+            grant.get("note")
+            for grant in grants
+            if grant.get("capability") == "delegate_work"
+            and isinstance(grant.get("note"), str)
+            and str(grant.get("note")).strip()
+        ),
+        None,
+    )
+    return view
+
+
+def _match_peer(
+    peer: dict[str, Any],
+    *,
+    peer_id: str | None = None,
+    peer_label: str | None = None,
+) -> bool:
+    if peer_id and peer.get("peer_id") == peer_id:
+        return True
+    if isinstance(peer_label, str) and peer_label.strip():
+        label_match = peer_label.strip().lower()
+        haystack = " ".join(
+            str(peer.get(key, "") or "")
+            for key in ("agent_label", "label", "peer_id", "agent_description")
+        ).lower()
+        return label_match in haystack
+    return False
+
+
+def _find_peer(
+    peers: list[dict[str, Any]],
+    *,
+    peer_id: str | None = None,
+    peer_label: str | None = None,
+) -> dict[str, Any] | None:
+    for peer in peers:
+        if _match_peer(peer, peer_id=peer_id, peer_label=peer_label):
+            return peer
+    return None
+
+
+def _peer_payload(peers: list[dict[str, Any]], grant_index: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
+    items = [
+        _decorate_peer(peer, grant_index.get(str(peer.get("peer_id")), []))
+        for peer in peers
+    ]
+    active_items = [peer for peer in items if peer.get("activity_state") == "active"]
+    quiet_items = [peer for peer in items if peer.get("activity_state") == "quiet"]
+    manual_items = [peer for peer in items if peer.get("activity_state") == "manual"]
+    return {
+        "items": items,
+        "active_items": active_items,
+        "quiet_items": quiet_items,
+        "manual_items": manual_items,
+        "active_count": len(active_items),
+        "quiet_count": len(quiet_items),
+        "manual_count": len(manual_items),
+        "note": (
+            "Treat only active_items as currently up. quiet_items were seen recently but may not "
+            "be reachable right now."
+        ),
+    }
+
+
 def _peer_label(peer_index: dict[str, dict[str, Any]], peer_id: str | None) -> str | None:
     if not peer_id:
         return None
@@ -297,7 +390,9 @@ def mesh_setup(args: dict[str, Any] | None = None, **_meta: Any) -> str:
 def mesh_list_peers(_args: dict[str, Any] | None = None, **_meta: Any) -> str:
     client = _client()
     try:
-        return _json_result({"items": client.list_peers()})
+        peers = client.list_peers()
+        grants = _grant_index(client)
+        return _json_result(_peer_payload(peers, grants))
     finally:
         client.close()
 
@@ -306,14 +401,14 @@ def mesh_browse_peers(args: dict[str, Any] | None = None, **_meta: Any) -> str:
     args = _normalize_args(args)
     client = _client()
     try:
-        return _json_result({
-            "items": client.browse_peers(
-                interest=args.get("interest"),
-                text=args.get("text"),
-                discovered_only=bool(args.get("discovered_only", False)),
-                refresh=bool(args.get("refresh", True)),
-            )
-        })
+        peers = client.browse_peers(
+            interest=args.get("interest"),
+            text=args.get("text"),
+            discovered_only=bool(args.get("discovered_only", False)),
+            refresh=bool(args.get("refresh", True)),
+        )
+        grants = _grant_index(client)
+        return _json_result(_peer_payload(peers, grants))
     finally:
         client.close()
 
@@ -330,6 +425,92 @@ def mesh_grant_capability(args: dict[str, Any] | None = None, **_meta: Any) -> s
     client = _client()
     try:
         return _json_result(client.grant(_normalize_args(args)))
+    finally:
+        client.close()
+
+
+def mesh_list_grants(_args: dict[str, Any] | None = None, **_meta: Any) -> str:
+    client = _client()
+    try:
+        peers = client.list_peers()
+        peer_index = {str(peer.get("peer_id")): peer for peer in peers if isinstance(peer, dict)}
+        items = client.list_capabilities()
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            peer_id = item.get("peer_id")
+            if isinstance(peer_id, str):
+                item["peer_label"] = _peer_label(peer_index, peer_id)
+        return _json_result({"items": items})
+    finally:
+        client.close()
+
+
+def mesh_whitelist_status(args: dict[str, Any] | None = None, **_meta: Any) -> str:
+    args = _normalize_args(args)
+    capability = str(args.get("capability") or "delegate_work")
+    client = _client()
+    try:
+        peers = client.list_peers()
+        grants = client.list_capabilities()
+        peer = _find_peer(
+            peers,
+            peer_id=args.get("peer_id"),
+            peer_label=args.get("peer_label"),
+        )
+        if peer is None:
+            return _json_result(
+                {
+                    "found": False,
+                    "peer_id": args.get("peer_id"),
+                    "peer_label": args.get("peer_label"),
+                    "capability": capability,
+                    "whitelisted": False,
+                    "note": "peer not found in the local WildMesh peer view",
+                }
+            )
+        matching = [
+            grant
+            for grant in grants
+            if isinstance(grant, dict)
+            and grant.get("peer_id") == peer.get("peer_id")
+            and grant.get("capability") == capability
+        ]
+        return _json_result(
+            {
+                "found": True,
+                "peer_id": peer.get("peer_id"),
+                "peer_label": _peer_label({str(peer.get("peer_id")): peer}, str(peer.get("peer_id"))),
+                "capability": capability,
+                "whitelisted": bool(matching),
+                "grant": matching[0] if matching else None,
+                "granted_capabilities": sorted(
+                    {
+                        str(grant.get("capability")).strip()
+                        for grant in grants
+                        if isinstance(grant, dict)
+                        and grant.get("peer_id") == peer.get("peer_id")
+                        and isinstance(grant.get("capability"), str)
+                    }
+                ),
+            }
+        )
+    finally:
+        client.close()
+
+
+def mesh_revoke_capability(args: dict[str, Any] | None = None, **_meta: Any) -> str:
+    args = _normalize_args(args)
+    client = _client()
+    try:
+        return _json_result(
+            client.revoke(
+                {
+                    "peer_id": args["peer_id"],
+                    "capability": args["capability"],
+                }
+            )
+        )
     finally:
         client.close()
 

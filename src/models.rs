@@ -170,6 +170,12 @@ pub struct GrantRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RevokeGrantRequest {
+    pub peer_id: String,
+    pub capability: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SendMessageRequest {
     pub peer_id: String,
     pub kind: MessageKind,

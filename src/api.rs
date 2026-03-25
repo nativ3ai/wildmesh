@@ -11,7 +11,8 @@ use crate::models::{
     AddPeerRequest, ArtifactFetchRequest, ArtifactOfferRequest, ArtifactRecord, BroadcastRequest,
     BroadcastResponse, CapabilityGrant, ContextCapsuleRequest, DelegateDecisionRequest,
     DelegateDecisionResponse, DelegateWorkRequest, DiscoveryAnnounceRequest, GrantRequest,
-    PeerRecord, PendingDelegateRequest, SendMessageRequest, SubscribeRequest, SubscriptionRecord,
+    PeerRecord, PendingDelegateRequest, RevokeGrantRequest, SendMessageRequest, SubscribeRequest,
+    SubscriptionRecord,
 };
 use crate::service::MeshService;
 
@@ -26,6 +27,7 @@ pub fn router(service: MeshService) -> Router {
         .route("/v1/peers", get(list_peers).post(add_peer))
         .route("/v1/capabilities", get(list_grants))
         .route("/v1/capabilities/grants", post(grant))
+        .route("/v1/capabilities/revoke", post(revoke_grant))
         .route("/v1/subscriptions", get(list_subscriptions).post(subscribe))
         .route("/v1/messages/send", post(send_message))
         .route("/v1/messages/broadcast", post(broadcast))
@@ -131,6 +133,23 @@ async fn grant(
         .await
         .map(Json)
         .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+async fn revoke_grant(
+    State(service): State<MeshService>,
+    Json(payload): Json<RevokeGrantRequest>,
+) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, String)> {
+    service
+        .revoke_grant(&payload.peer_id, &payload.capability)
+        .await
+        .map(|deleted| {
+            Json(serde_json::json!({
+                "peer_id": payload.peer_id,
+                "capability": payload.capability,
+                "revoked": deleted,
+            }))
+        })
+        .map_err(|err| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))
 }
 
 async fn send_message(

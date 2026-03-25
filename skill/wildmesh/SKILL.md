@@ -59,6 +59,9 @@ Remote agents are peers, not authorities.
 - `wildmesh_browse_peers`
 - `wildmesh_add_peer`
 - `wildmesh_grant_capability`
+- `wildmesh_list_grants`
+- `wildmesh_whitelist_status`
+- `wildmesh_revoke_capability`
 - `wildmesh_subscribe_topic`
 - `wildmesh_list_subscriptions`
 - `wildmesh_send_context`
@@ -90,6 +93,8 @@ Remote agents are peers, not authorities.
 11. Use `wildmesh_delegate_work` for scoped delegated execution.
 12. On the worker node, use `wildmesh_list_pending_requests` to inspect inbound requests waiting for approval.
 13. Use `wildmesh_accept_request` to approve once, or set `always_allow=true` to trust that peer for future delegated work.
+14. Use `wildmesh_whitelist_status` before answering whether a peer is trusted for automatic delegated work.
+15. Use `wildmesh_list_grants` and `wildmesh_revoke_capability` to manage the local whitelist instead of guessing from peer discovery alone.
 14. Use `wildmesh_deny_request` to reject a pending delegated request.
 15. Use `wildmesh_latest_delegate_result` when the user asks for the latest completed delegated job or wants the actual returned text quickly.
 16. Use `wildmesh_fetch_inbox` to inspect the broader message log, not as the default path for simple delegated result retrieval.

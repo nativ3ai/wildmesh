@@ -16,12 +16,14 @@ class _ClientStub:
         profile_result: dict[str, Any] | None = None,
         peers_result: list[dict[str, Any]] | None = None,
         inbox_result: list[dict[str, Any]] | None = None,
+        grants_result: list[dict[str, Any]] | None = None,
     ) -> None:
         self._status_result = status_result or {"identity": {"peer_id": "peer-1"}}
         self._status_error = status_error
         self._profile_result = profile_result or {"agent_label": "node-1"}
         self._peers_result = peers_result or []
         self._inbox_result = inbox_result or []
+        self._grants_result = grants_result or []
 
     def close(self) -> None:
         return None
@@ -37,8 +39,18 @@ class _ClientStub:
     def list_peers(self) -> list[dict[str, Any]]:
         return list(self._peers_result)
 
+    def list_capabilities(self) -> list[dict[str, Any]]:
+        return list(self._grants_result)
+
     def inbox(self, limit: int = 50) -> list[dict[str, Any]]:
         return list(self._inbox_result)[:limit]
+
+    def revoke(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "peer_id": payload["peer_id"],
+            "capability": payload["capability"],
+            "revoked": True,
+        }
 
 
 def test_mesh_profile_ignores_task_metadata(monkeypatch):
@@ -226,3 +238,54 @@ def test_mesh_fetch_inbox_surfaces_latest_delegate_result(monkeypatch):
     assert result["latest_delegate_result"]["task_id"] == "task-2"
     assert result["delegate_results"][0]["output"] == "inline output"
     assert "task_id is not an artifact id" in result["note"]
+
+
+def test_mesh_whitelist_status_detects_delegate_trust(monkeypatch):
+    monkeypatch.setattr(
+        tools,
+        "_client",
+        lambda: _ClientStub(
+            peers_result=[
+                {
+                    "peer_id": "peer-gamma",
+                    "agent_label": "gamma-live",
+                    "agent_description": "worker",
+                }
+            ],
+            grants_result=[
+                {
+                    "peer_id": "peer-gamma",
+                    "capability": "delegate_work",
+                    "note": "trusted worker",
+                }
+            ],
+        ),
+    )
+    result = json.loads(tools.mesh_whitelist_status({"peer_label": "gamma-live"}))
+    assert result["found"] is True
+    assert result["whitelisted"] is True
+    assert result["grant"]["note"] == "trusted worker"
+
+
+def test_mesh_list_peers_surfaces_granted_capabilities(monkeypatch):
+    monkeypatch.setattr(
+        tools,
+        "_client",
+        lambda: _ClientStub(
+            peers_result=[
+                {
+                    "peer_id": "peer-gamma",
+                    "agent_label": "gamma-live",
+                    "activity_state": "active",
+                }
+            ],
+            grants_result=[
+                {"peer_id": "peer-gamma", "capability": "delegate_work", "note": "trusted"},
+                {"peer_id": "peer-gamma", "capability": "artifact_exchange"},
+            ],
+        ),
+    )
+    result = json.loads(tools.mesh_list_peers())
+    assert result["active_count"] == 1
+    assert result["items"][0]["whitelisted_for_delegate_work"] is True
+    assert "artifact_exchange" in result["items"][0]["granted_capabilities"]

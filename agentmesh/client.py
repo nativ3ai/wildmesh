@@ -71,6 +71,9 @@ class AgentMeshClient:
     def grant(self, payload: dict[str, Any]) -> dict[str, Any]:
         return self._client.post("/v1/capabilities/grants", json=payload).raise_for_status().json()
 
+    def revoke(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._client.post("/v1/capabilities/revoke", json=payload).raise_for_status().json()
+
     def list_subscriptions(self) -> list[dict[str, Any]]:
         return self._client.get("/v1/subscriptions").raise_for_status().json()
 

@@ -13,6 +13,7 @@ from .tools import (
     mesh_fetch_inbox,
     mesh_deny_request,
     mesh_grant_capability,
+    mesh_list_grants,
     mesh_list_artifacts,
     mesh_list_pending_requests,
     mesh_list_peers,
@@ -20,11 +21,13 @@ from .tools import (
     mesh_list_subscriptions,
     mesh_offer_artifact,
     mesh_profile,
+    mesh_revoke_capability,
     mesh_setup,
     mesh_send_context,
     mesh_send_task,
     mesh_status,
     mesh_subscribe_topic,
+    mesh_whitelist_status,
 )
 
 
@@ -166,6 +169,64 @@ def register(ctx) -> None:
         is_async=False,
         description="Grant a capability to a peer.",
         emoji="🛡️",
+    )
+    ctx.register_tool(
+        name="wildmesh_list_grants",
+        toolset=TOOLSET,
+        schema={
+            "name": "wildmesh_list_grants",
+            "description": "List local WildMesh trust grants and whitelist entries.",
+            "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+        },
+        handler=mesh_list_grants,
+        check_fn=check_agentmesh_available,
+        is_async=False,
+        description="Inspect the local capability grants that control automatic delegation.",
+        emoji="📜",
+    )
+    ctx.register_tool(
+        name="wildmesh_whitelist_status",
+        toolset=TOOLSET,
+        schema={
+            "name": "wildmesh_whitelist_status",
+            "description": "Check whether a peer is trusted locally for a capability such as delegate_work.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "peer_id": {"type": "string"},
+                    "peer_label": {"type": "string"},
+                    "capability": {"type": "string"},
+                },
+                "additionalProperties": False,
+            },
+        },
+        handler=mesh_whitelist_status,
+        check_fn=check_agentmesh_available,
+        is_async=False,
+        description="Check whether a peer is whitelisted for automatic delegated work or another capability.",
+        emoji="🔎",
+    )
+    ctx.register_tool(
+        name="wildmesh_revoke_capability",
+        toolset=TOOLSET,
+        schema={
+            "name": "wildmesh_revoke_capability",
+            "description": "Revoke a local capability grant from a peer.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "peer_id": {"type": "string"},
+                    "capability": {"type": "string"},
+                },
+                "required": ["peer_id", "capability"],
+                "additionalProperties": False,
+            },
+        },
+        handler=mesh_revoke_capability,
+        check_fn=check_agentmesh_available,
+        is_async=False,
+        description="Revoke a capability from a peer so future work requires approval again.",
+        emoji="🚫",
     )
     ctx.register_tool(
         name="wildmesh_subscribe_topic",

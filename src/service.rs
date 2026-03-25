@@ -170,6 +170,10 @@ impl MeshService {
         storage::list_grants(&self.pool).await
     }
 
+    pub async fn revoke_grant(&self, peer_id: &str, capability: &str) -> Result<bool> {
+        storage::delete_grant(&self.pool, peer_id, capability).await
+    }
+
     pub async fn subscribe(&self, topic: &str) -> Result<SubscriptionRecord> {
         let topic = topic.trim();
         if topic.is_empty() {

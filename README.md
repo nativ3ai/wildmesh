@@ -201,6 +201,8 @@ wildmesh context-send <peer-id> \
   --context '{"headline":"rates higher for longer","region":"US"}'
 
 wildmesh grant <peer-id> delegate_work
+wildmesh grants
+wildmesh revoke <peer-id> delegate_work
 wildmesh delegate <peer-id> summary \
   --instruction "Summarize the headline" \
   --input '{"headline":"rates higher for longer"}'
@@ -234,6 +236,19 @@ the delegated task still lands in the pending queue. From there the worker can:
 - accept it once
 - deny it
 - trust that peer for future delegated work and accept the current request
+
+To inspect or manage the automatic delegation whitelist:
+
+```bash
+wildmesh grants
+wildmesh revoke <peer-id> delegate_work
+```
+
+Inside Hermes, use:
+
+- `Use WildMesh to check whether gamma-live is whitelisted for automatic delegated work.`
+- `Use WildMesh to list local WildMesh trust grants.`
+- `Use WildMesh to revoke gamma-live's delegate_work capability so future jobs require approval again.`
 
 ## Positioning
 

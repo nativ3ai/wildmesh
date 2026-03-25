@@ -10,6 +10,9 @@ provides_tools:
   - wildmesh_browse_peers
   - wildmesh_add_peer
   - wildmesh_grant_capability
+  - wildmesh_list_grants
+  - wildmesh_whitelist_status
+  - wildmesh_revoke_capability
   - wildmesh_subscribe_topic
   - wildmesh_list_subscriptions
   - wildmesh_send_context

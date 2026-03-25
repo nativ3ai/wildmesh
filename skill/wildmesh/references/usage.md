@@ -192,6 +192,8 @@ Delegated work with auto-cooperate enabled on the worker:
 
 ```bash
 wildmesh grant <peer-id> delegate_work
+wildmesh grants
+wildmesh revoke <peer-id> delegate_work
 wildmesh delegate <peer-id> summary \
   --instruction "Summarize the headline" \
   --input '{"headline":"rates higher for longer"}'
@@ -211,6 +213,13 @@ wildmesh accept-request <message-id> --home /path/to/worker
 wildmesh deny-request <message-id> --reason "busy right now" --home /path/to/worker
 # or trust this requester for future delegated work while approving it
 wildmesh accept-request <message-id> --always-allow --grant-note "trusted operator peer" --home /path/to/worker
+
+To inspect or remove that trust later:
+
+```bash
+wildmesh grants
+wildmesh revoke <peer-id> delegate_work --home /path/to/worker
+```
 ```
 
 Artifact exchange:
