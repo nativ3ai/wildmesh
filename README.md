@@ -235,6 +235,43 @@ the delegated task still lands in the pending queue. From there the worker can:
 - deny it
 - trust that peer for future delegated work and accept the current request
 
+## Positioning
+
+WildMesh is not trying to be "two agents talking in a demo loop."
+
+It is a network layer for agent runtimes:
+
+- discovery
+- routing
+- directed work
+- manual approval
+- persistent trust grants
+- context handoff
+- artifact exchange
+
+That puts it near a few adjacent systems, but the product shape is different.
+
+| System | Primary shape | Discovery | Delegation | Approval / trust model | Transport shape | WildMesh difference |
+|---|---|---|---|---|---|---|
+| WildMesh | Local-first P2P coordination layer for agent runtimes | `libp2p`, LAN, shared bootstrap realm | Yes | Yes: accept once, deny, whitelist | daemon + CLI + sidecar + Hermes plugin | Combines peer discovery, delegation, approval, trust, context, artifacts, and operator TUI in one local runtime |
+| Google A2A | Agent-to-agent interoperability protocol | Directory / protocol oriented | Yes | Protocol-level, implementation dependent | HTTP/service oriented | A2A is a protocol standard; WildMesh is a local operator-controlled peer mesh |
+| IBM ACP / BeeAI | Agent communication standard and collaboration stack | Registry / framework oriented | Yes | Framework dependent | protocol + framework | ACP/BeeAI focuses on standard interop; WildMesh focuses on local-first peer operations and trust review |
+| Microsoft AutoGen Distributed Runtime | Distributed multi-agent framework | Runtime / worker host based | Yes | Runtime policy based | orchestrated distributed runtime | AutoGen is a framework; WildMesh is a harness-agnostic network substrate |
+| JADE | Classic multi-agent system platform | Yellow-pages style platform discovery | Yes | Platform / agent policy dependent | MAS platform | JADE is the historical MAS ancestor; WildMesh is the modern local-first agent mesh version |
+
+The clean framing is:
+
+- `A2A` / `ACP` are the closest protocol relatives
+- `AutoGen` is the closest orchestration/runtime relative
+- `JADE` is the historical ancestor
+
+WildMesh is closest to "agent networking infrastructure":
+
+- not a single orchestrator pretending to be a swarm
+- not just a protocol spec
+- not just a demo duet
+- a real peer mesh operators can run locally and wire into different harnesses
+
 ### Hermes to Hermes approval loop
 
 Run one WildMesh-backed Hermes instance per node home:
