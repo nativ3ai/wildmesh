@@ -450,6 +450,10 @@ pub struct PendingDelegateRequest {
     pub max_output_chars: Option<usize>,
     #[serde(default)]
     pub capability: Option<String>,
+    #[serde(default)]
+    pub peer_has_capability_grant: bool,
+    #[serde(default)]
+    pub grant_note: Option<String>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -458,6 +462,12 @@ pub struct DelegateDecisionRequest {
     pub message_id: String,
     #[serde(default)]
     pub reason: Option<String>,
+    #[serde(default)]
+    pub always_allow: bool,
+    #[serde(default)]
+    pub grant_capability: Option<String>,
+    #[serde(default)]
+    pub grant_note: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -470,6 +480,10 @@ pub struct DelegateDecisionResponse {
     pub reply_message_id: Option<String>,
     #[serde(default)]
     pub reason: Option<String>,
+    #[serde(default)]
+    pub grant_created: bool,
+    #[serde(default)]
+    pub granted_capability: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

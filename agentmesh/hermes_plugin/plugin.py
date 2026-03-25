@@ -332,10 +332,15 @@ def register(ctx) -> None:
         toolset=TOOLSET,
         schema={
             "name": "wildmesh_accept_request",
-            "description": "Approve a pending WildMesh delegated work request and trigger local execution.",
+            "description": "Approve a pending WildMesh delegated work request. Set always_allow=true to persist trust for future delegated work from that peer.",
             "parameters": {
                 "type": "object",
-                "properties": {"message_id": {"type": "string"}},
+                "properties": {
+                    "message_id": {"type": "string"},
+                    "always_allow": {"type": "boolean"},
+                    "grant_note": {"type": "string"},
+                    "grant_capability": {"type": "string"},
+                },
                 "required": ["message_id"],
                 "additionalProperties": False,
             },
@@ -343,7 +348,7 @@ def register(ctx) -> None:
         handler=mesh_accept_request,
         check_fn=check_agentmesh_available,
         is_async=False,
-        description="Approve a pending delegated request.",
+        description="Approve a pending delegated request once or trust the peer for future delegated work.",
         emoji="✅",
     )
     ctx.register_tool(

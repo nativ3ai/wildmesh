@@ -145,6 +145,7 @@ automatically instead of lingering as ghost nodes.
 - inbox/outbox inspection
 - message alert marker on the `Messages` tab when new inbox traffic arrives
 - pending approval queue on the `Requests` tab
+- untrusted delegated work lands in `Requests` so the operator can review it instead of losing the request
 - quick discovery, subscribe, broadcast, grant, note, and task flows
 - keyboard-first navigation instead of raw JSON
 
@@ -154,7 +155,8 @@ Core dashboard keys:
 - `j/k` or arrows move the selection
 - `r` refresh
 - `d` trigger discovery, or deny the selected request on the `Requests` tab
-- `a` accept the selected request on the `Requests` tab
+- `a` accept the selected request once on the `Requests` tab
+- `w` trust the selected peer for future delegated work and accept the current request
 - `/` open the peer filter
 - `s` subscribe to a topic
 - `b` broadcast to a topic
@@ -202,6 +204,8 @@ wildmesh pending
 wildmesh accept-request <message-id>
 # or
 wildmesh deny-request <message-id> --reason "busy right now"
+# or trust the requester for future delegated work while approving this request
+wildmesh accept-request <message-id> --always-allow --grant-note "trusted operator peer"
 
 wildmesh grant <peer-id> artifact_exchange
 wildmesh artifact-offer <peer-id> ./notes.md --note "latest branch notes"
@@ -218,6 +222,13 @@ Those flows map directly to the mesh primitives:
 When the worker has `executor_mode != disabled` but `cooperate_enabled = false`,
 delegated work lands in a pending approval queue instead of auto-executing.
 That queue can be resolved from the dashboard, the CLI, or Hermes.
+
+If the requester does not already have a persistent `delegate_work` trust grant,
+the delegated task still lands in the pending queue. From there the worker can:
+
+- accept it once
+- deny it
+- trust that peer for future delegated work and accept the current request
 
 ### Hermes to Hermes approval loop
 
@@ -243,12 +254,16 @@ Use WildMesh to browse peers, find beta-live, and delegate a one-paragraph FX su
 On the worker Hermes or the worker dashboard:
 
 - inspect the pending request queue
-- accept or deny the request
+- accept it once, deny it, or trust the requester for future delegated work
 
 Example worker prompt:
 
 ```text
 Use WildMesh to check pending requests. If the newest summary request is from alpha-live, accept it and then summarize what was executed.
+```
+
+```text
+Use WildMesh to inspect pending requests. If the newest summary request is from alpha-live and it looks legitimate, accept it with always_allow=true so alpha-live can delegate future work without another approval prompt.
 ```
 
 Equivalent operator CLI:
@@ -258,6 +273,8 @@ wildmesh pending --home /tmp/wildmesh-b
 wildmesh accept-request <message-id> --home /tmp/wildmesh-b
 # or
 wildmesh deny-request <message-id> --reason "busy right now" --home /tmp/wildmesh-b
+# or
+wildmesh accept-request <message-id> --always-allow --grant-note "trusted operator peer" --home /tmp/wildmesh-b
 ```
 
 ## What the daemon exposes

@@ -75,7 +75,7 @@ pub enum SwarmCommand {
         respond_to: oneshot::Sender<Result<()>>,
     },
     ApproveDelegateRequest {
-        message_id: String,
+        request: crate::models::DelegateDecisionRequest,
         respond_to: oneshot::Sender<Result<DelegateDecisionResponse>>,
     },
     DenyDelegateRequest {
@@ -159,12 +159,12 @@ impl SwarmHandle {
 
     pub async fn approve_delegate_request(
         &self,
-        message_id: String,
+        request: crate::models::DelegateDecisionRequest,
     ) -> Result<DelegateDecisionResponse> {
         let (tx, rx) = oneshot::channel();
         self.sender
             .send(SwarmCommand::ApproveDelegateRequest {
-                message_id,
+                request,
                 respond_to: tx,
             })
             .await
@@ -748,10 +748,10 @@ async fn handle_command(
             let _ = respond_to.send(result);
         }
         SwarmCommand::ApproveDelegateRequest {
-            message_id,
+            request,
             respond_to,
         } => {
-            let result = approve_pending_delegate_request(state, &message_id).await;
+            let result = approve_pending_delegate_request(state, request).await;
             let _ = respond_to.send(result);
         }
         SwarmCommand::DenyDelegateRequest {
@@ -1404,6 +1404,7 @@ async fn accept_inbound_envelope(
         envelope.capability.as_deref(),
     )
     .await?;
+    let is_delegate_request = matches!(envelope.kind, MessageKind::DelegateRequest);
     let allowed = match envelope.kind {
         MessageKind::Hello | MessageKind::Broadcast | MessageKind::PeerExchange => true,
         MessageKind::TaskResult | MessageKind::DelegateResult | MessageKind::ArtifactPayload => {
@@ -1412,7 +1413,14 @@ async fn accept_inbound_envelope(
         _ => grant_allowed,
     };
     let auto_delegate = state.config.cooperate_enabled && executor::delegate_available(&state.config);
-    let (status, reason, delivery_status) = if !allowed {
+    let (status, reason, delivery_status) = if is_delegate_request && (!grant_allowed || !auto_delegate) {
+        let reason = if grant_allowed {
+            "pending local approval".to_string()
+        } else {
+            "awaiting local approval or trust grant".to_string()
+        };
+        (MessageStatus::Pending, Some(reason), "pending".to_string())
+    } else if !allowed {
         (
             MessageStatus::Blocked,
             Some(format!(
@@ -1420,12 +1428,6 @@ async fn accept_inbound_envelope(
                 envelope.capability.as_deref().unwrap_or("<none>")
             )),
             "blocked".to_string(),
-        )
-    } else if matches!(envelope.kind, MessageKind::DelegateRequest) && !auto_delegate {
-        (
-            MessageStatus::Pending,
-            Some("pending local approval".to_string()),
-            "pending".to_string(),
         )
     } else {
         (MessageStatus::Received, Some("accepted".to_string()), "delivered".to_string())
@@ -1661,8 +1663,9 @@ async fn queue_delegate_denial(
 
 async fn approve_pending_delegate_request(
     state: &RuntimeState,
-    message_id: &str,
+    decision: crate::models::DelegateDecisionRequest,
 ) -> Result<DelegateDecisionResponse> {
+    let message_id = decision.message_id.as_str();
     let stored = storage::get_message(&state.pool, message_id)
         .await?
         .ok_or_else(|| anyhow!("pending request not found: {message_id}"))?;
@@ -1674,8 +1677,34 @@ async fn approve_pending_delegate_request(
     if !matches!(stored.status, MessageStatus::Pending) {
         bail!("delegate request is not pending approval");
     }
-    let request = serde_json::from_value::<DelegateRequestBody>(stored.body.clone())?;
-    execute_delegate_and_queue_result(state, &stored.peer_id, &stored.id, request).await?;
+    let delegate_request = serde_json::from_value::<DelegateRequestBody>(stored.body.clone())?;
+    let mut grant_created = false;
+    let granted_capability = if decision.always_allow {
+        let capability = decision
+            .grant_capability
+            .clone()
+            .or_else(|| stored.capability.clone())
+            .unwrap_or_else(|| "delegate_work".to_string());
+        storage::upsert_grant(
+            &state.pool,
+            &crate::models::CapabilityGrant {
+                peer_id: stored.peer_id.clone(),
+                capability: capability.clone(),
+                expires_at: None,
+                note: decision
+                    .grant_note
+                    .clone()
+                    .or_else(|| Some("approved from pending request".to_string())),
+                created_at: Utc::now(),
+            },
+        )
+        .await?;
+        grant_created = true;
+        Some(capability)
+    } else {
+        None
+    };
+    execute_delegate_and_queue_result(state, &stored.peer_id, &stored.id, delegate_request).await?;
     storage::update_message_status(
         &state.pool,
         &stored.id,
@@ -1689,7 +1718,13 @@ async fn approve_pending_delegate_request(
         action: "accept".to_string(),
         status: "approved".to_string(),
         reply_message_id: None,
-        reason: Some("delegate request approved".to_string()),
+        reason: Some(if grant_created {
+            "delegate request approved and peer trusted for future delegated work".to_string()
+        } else {
+            "delegate request approved once".to_string()
+        }),
+        grant_created,
+        granted_capability,
     })
 }
 
@@ -1721,6 +1756,8 @@ async fn deny_pending_delegate_request(
         status: "denied".to_string(),
         reply_message_id: None,
         reason: Some(reason.to_string()),
+        grant_created: false,
+        granted_capability: None,
     })
 }
 

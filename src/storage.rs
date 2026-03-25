@@ -479,9 +479,12 @@ pub async fn list_pending_delegate_requests(
             m.created_at,
             p.label,
             p.agent_label,
-            p.agent_description
+            p.agent_description,
+            g.note AS grant_note,
+            CASE WHEN g.peer_id IS NULL THEN 0 ELSE 1 END AS peer_has_capability_grant
         FROM messages m
         LEFT JOIN peers p ON p.peer_id = m.peer_id
+        LEFT JOIN grants g ON g.peer_id = m.peer_id AND g.capability = m.capability
         WHERE m.direction = 'inbound'
           AND m.kind = 'delegate_request'
           AND m.status = 'pending'
@@ -510,6 +513,8 @@ pub async fn list_pending_delegate_requests(
                 context: body.context,
                 max_output_chars: body.max_output_chars,
                 capability: row.get("capability"),
+                peer_has_capability_grant: row.get::<i64, _>("peer_has_capability_grant") != 0,
+                grant_note: row.get("grant_note"),
                 created_at: parse_datetime(&row.get::<String, _>("created_at"))?,
             })
         })

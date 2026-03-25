@@ -333,7 +333,7 @@ impl MeshService {
         &self,
         request: DelegateDecisionRequest,
     ) -> Result<DelegateDecisionResponse> {
-        self.swarm.approve_delegate_request(request.message_id).await
+        self.swarm.approve_delegate_request(request).await
     }
 
     pub async fn deny_delegate_request(

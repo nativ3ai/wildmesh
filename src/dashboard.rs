@@ -722,19 +722,30 @@ impl DashboardApp {
         }
     }
 
-    fn accept_request(&mut self) {
+    fn accept_request(&mut self, always_allow: bool) {
         let Some(request) = self.selected_request() else {
             self.show_toast("select a pending request first", Color::Yellow);
             return;
         };
-        let payload = json!({ "message_id": request.message_id });
+        let payload = json!({
+            "message_id": request.message_id,
+            "always_allow": always_allow,
+            "grant_note": if always_allow { Some("trusted from dashboard".to_string()) } else { None },
+        });
         match self
             .client
             .post::<Value>("/v1/delegate/accept", &payload)
         {
             Ok(_) => {
                 self.refresh();
-                self.show_toast("request approved", Color::Green);
+                self.show_toast(
+                    if always_allow {
+                        "request approved and peer trusted"
+                    } else {
+                        "request approved once"
+                    },
+                    Color::Green,
+                );
             }
             Err(err) => {
                 self.last_error = Some(err.to_string());
@@ -935,7 +946,8 @@ pub fn run(home: Option<PathBuf>) -> Result<()> {
                 app.select_tab(next);
             }
             KeyCode::Char('r') => app.refresh(),
-            KeyCode::Char('a') if app.current_tab() == TabPage::Requests => app.accept_request(),
+            KeyCode::Char('a') if app.current_tab() == TabPage::Requests => app.accept_request(false),
+            KeyCode::Char('w') if app.current_tab() == TabPage::Requests => app.accept_request(true),
             KeyCode::Char('d') if app.current_tab() == TabPage::Requests => app.open_deny_request(),
             KeyCode::Char('d') => app.discover_now(),
             KeyCode::Char('/') => app.open_peer_filter(),
@@ -1729,9 +1741,14 @@ fn render_requests(frame: &mut Frame, area: Rect, app: &DashboardApp) {
                     .unwrap_or_else(|| short_peer(&item.peer_id));
                 let line1 = format!("{}  {}", who, item.task_type);
                 let line2 = format!(
-                    "{}  {}",
+                    "{}  {}{}",
                     short_peer(&item.peer_id),
-                    format_timestamp(item.created_at)
+                    format_timestamp(item.created_at),
+                    if item.peer_has_capability_grant {
+                        "  [trusted]"
+                    } else {
+                        "  [review]"
+                    }
                 );
                 ListItem::new(vec![
                     Line::from(Span::styled(line1, Style::default().fg(Color::White))),
@@ -1784,6 +1801,15 @@ fn render_requests(frame: &mut Frame, area: Rect, app: &DashboardApp) {
                 Span::raw(request.peer_id.clone()),
             ]),
             Line::from(vec![
+                Span::styled("desc   ", neon(Color::LightGreen)),
+                Span::raw(
+                    request
+                        .peer_agent_description
+                        .clone()
+                        .unwrap_or_else(|| "<none>".to_string()),
+                ),
+            ]),
+            Line::from(vec![
                 Span::styled("task   ", neon(Color::LightGreen)),
                 Span::raw(request.task_type.clone()),
             ]),
@@ -1792,15 +1818,31 @@ fn render_requests(frame: &mut Frame, area: Rect, app: &DashboardApp) {
                 Span::raw(request.capability.clone().unwrap_or_else(|| "<none>".to_string())),
             ]),
             Line::from(vec![
+                Span::styled("trust  ", neon(Color::LightGreen)),
+                Span::raw(if request.peer_has_capability_grant {
+                    "delegate_work allowed".to_string()
+                } else {
+                    "review required".to_string()
+                }),
+            ]),
+            Line::from(vec![
                 Span::styled("time   ", neon(Color::LightGreen)),
                 Span::raw(format_timestamp(request.created_at)),
             ]),
+        ];
+        if let Some(note) = request.grant_note.clone().filter(|value| !value.trim().is_empty()) {
+            lines.push(Line::from(vec![
+                Span::styled("note   ", neon(Color::LightGreen)),
+                Span::raw(note),
+            ]));
+        }
+        lines.extend([
             Line::from(""),
             Line::from(Span::styled("INSTRUCTION", neon(Color::Yellow))),
             Line::from(request.instruction.clone()),
             Line::from(""),
             Line::from(Span::styled("INPUT", neon(Color::LightMagenta))),
-        ];
+        ]);
         for line in input.lines() {
             lines.push(Line::from(line.to_string()));
         }
@@ -1811,7 +1853,7 @@ fn render_requests(frame: &mut Frame, area: Rect, app: &DashboardApp) {
         }
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
-            "a accept   d deny   j/k move",
+            "a accept once   w trust + accept   d deny   j/k move",
             neon(Color::Cyan),
         )));
         Text::from(lines)
@@ -1975,6 +2017,7 @@ fn render_actions(frame: &mut Frame, area: Rect, app: &DashboardApp) {
         Line::from("d discover   s subscribe   b broadcast"),
         Line::from("g grant      n note        t summary task"),
         Line::from("m toggle inbox/outbox"),
+        Line::from("Requests tab: a accept once   w trust + accept   d deny"),
     ]);
     frame.render_widget(
         Paragraph::new(detail)
@@ -1997,7 +2040,8 @@ fn render_help(frame: &mut Frame, area: Rect, _app: &DashboardApp) {
         Line::from("j/k or arrows move the current list"),
         Line::from("r refresh local snapshot"),
         Line::from("d pulse discovery now"),
-        Line::from("a accept selected pending request"),
+        Line::from("a accept selected pending request once"),
+        Line::from("w trust peer and accept selected request"),
         Line::from("/ filter peers"),
         Line::from("s subscribe to a topic"),
         Line::from("b broadcast to a topic"),
@@ -2059,7 +2103,17 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &DashboardApp) {
         Span::styled("d", neon(Color::Cyan)),
         Span::raw(if app.current_tab() == TabPage::Requests { " deny  " } else { " discover  " }),
         Span::styled("a", neon(Color::Cyan)),
-        Span::raw(" accept  "),
+        Span::raw(if app.current_tab() == TabPage::Requests {
+            " accept once  "
+        } else {
+            " accept  "
+        }),
+        Span::styled("w", neon(Color::Cyan)),
+        Span::raw(if app.current_tab() == TabPage::Requests {
+            " trust+accept  "
+        } else {
+            " trust  "
+        }),
         Span::styled("/", neon(Color::Cyan)),
         Span::raw(" filter  "),
         Span::styled("?", neon(Color::Cyan)),

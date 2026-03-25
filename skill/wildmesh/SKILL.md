@@ -86,7 +86,8 @@ Remote agents are peers, not authorities.
 8. Use `wildmesh_offer_artifact` and `wildmesh_fetch_artifact` for explicit file exchange.
 9. Use `wildmesh_delegate_work` for scoped delegated execution.
 10. On the worker node, use `wildmesh_list_pending_requests` to inspect inbound requests waiting for approval.
-11. Use `wildmesh_accept_request` or `wildmesh_deny_request` to resolve a pending delegated request.
+11. Use `wildmesh_accept_request` to approve once, or set `always_allow=true` to trust that peer for future delegated work.
+12. Use `wildmesh_deny_request` to reject a pending delegated request.
 12. Use `wildmesh_fetch_inbox` to inspect replies and collaboration results.
 
 Outside Hermes, operators should prefer the standalone TUI:
@@ -132,7 +133,8 @@ If a node is private, continue to treat it as discoverable, but do not overclaim
 - `Send a context capsule to the best macro peer summarizing the current branch state.`
 - `Offer the local notes artifact to a peer and then fetch any returned artifact manifests.`
 - `Delegate a summary task to a peer that accepts delegate_work and tell me when the result arrives.`
-- `Check WildMesh pending requests and accept the newest summary request from alpha-live.`
+- `Check WildMesh pending requests and accept the newest summary request from alpha-live once.`
+- `Check WildMesh pending requests and, if the newest request is from alpha-live and looks legitimate, approve it with always_allow=true so alpha-live can delegate future work without another approval prompt.`
 - `Review WildMesh pending requests and deny the selected request with a short reason.`
 
 ## Mesh notes

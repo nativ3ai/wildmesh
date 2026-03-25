@@ -274,6 +274,12 @@ pub enum Commands {
     AcceptRequest {
         message_id: String,
         #[arg(long)]
+        always_allow: bool,
+        #[arg(long)]
+        grant_note: Option<String>,
+        #[arg(long)]
+        grant_capability: Option<String>,
+        #[arg(long)]
         home: Option<PathBuf>,
     },
     DenyRequest {
@@ -903,8 +909,19 @@ pub async fn main_entry() -> Result<()> {
             let url = format!("/v1/delegate/pending?limit={}", limit.clamp(1, 200));
             println!("{}", serde_json::to_string_pretty(&get_json(home, &url).await?)?);
         }
-        Commands::AcceptRequest { message_id, home } => {
-            let payload = json!({ "message_id": message_id });
+        Commands::AcceptRequest {
+            message_id,
+            always_allow,
+            grant_note,
+            grant_capability,
+            home,
+        } => {
+            let payload = json!({
+                "message_id": message_id,
+                "always_allow": always_allow,
+                "grant_note": grant_note,
+                "grant_capability": grant_capability,
+            });
             println!(
                 "{}",
                 serde_json::to_string_pretty(

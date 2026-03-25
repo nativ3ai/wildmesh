@@ -123,7 +123,8 @@ Dashboard controls:
 - `j/k` move through peers, messages, and actions
 - `r` refresh state
 - `d` trigger discovery, or deny the selected pending request on the `Requests` tab
-- `a` accept the selected pending request on the `Requests` tab
+- `a` accept the selected pending request once on the `Requests` tab
+- `w` trust the selected peer for future delegated work and accept the current request
 - `/` open the peer filter
 - `s` subscribe to a topic
 - `b` broadcast to a topic
@@ -141,6 +142,10 @@ The dashboard overview now includes:
 - a `state` line so operators can tell whether the mesh worker is actually live
 - a message alert marker on the `Messages` tab when new inbox traffic arrives
 - a `Requests` tab for pending delegated work approvals
+
+Delegate requests that do not already have a persistent `delegate_work` grant
+still land in `Requests` so the worker can review them instead of dropping
+them at the capability gate.
 
 Important discovery note:
 
@@ -192,6 +197,8 @@ wildmesh pending --home /path/to/worker
 wildmesh accept-request <message-id> --home /path/to/worker
 # or
 wildmesh deny-request <message-id> --reason "busy right now" --home /path/to/worker
+# or trust this requester for future delegated work while approving it
+wildmesh accept-request <message-id> --always-allow --grant-note "trusted operator peer" --home /path/to/worker
 ```
 
 Artifact exchange:

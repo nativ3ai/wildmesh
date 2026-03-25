@@ -379,17 +379,6 @@ async fn delegated_work_can_wait_for_manual_approval() {
         .find(|peer| peer.agent_label.as_deref() == Some("alpha-manual"))
         .expect("alpha visible");
 
-    service_b
-        .grant(agentmesh::models::CapabilityGrant {
-            peer_id: peer_a.peer_id.clone(),
-            capability: "delegate_work".to_string(),
-            expires_at: None,
-            note: Some("manual delegate".to_string()),
-            created_at: Utc::now(),
-        })
-        .await
-        .expect("grant delegate");
-
     service_a
         .delegate_work(DelegateWorkRequest {
             peer_id: peer_b.peer_id.clone(),
@@ -430,13 +419,25 @@ async fn delegated_work_can_wait_for_manual_approval() {
         .find(|item| item.peer_id == peer_a.peer_id)
         .expect("pending request exists");
 
+    assert!(!pending.peer_has_capability_grant);
+
     service_b
         .approve_delegate_request(DelegateDecisionRequest {
             message_id: pending.message_id,
             reason: None,
+            always_allow: false,
+            grant_capability: None,
+            grant_note: None,
         })
         .await
         .expect("approve pending");
+
+    let grants = service_b.list_grants().await.expect("list grants");
+    assert!(
+        !grants
+            .iter()
+            .any(|grant| grant.peer_id == peer_a.peer_id && grant.capability == "delegate_work")
+    );
 
     wait_for("delegate result", || async {
         service_a
@@ -447,6 +448,121 @@ async fn delegated_work_can_wait_for_manual_approval() {
             .any(|message| matches!(message.kind, MessageKind::DelegateResult))
     })
     .await;
+}
+
+#[tokio::test]
+async fn delegated_work_can_be_trusted_from_the_pending_queue() {
+    let dir = tempdir().expect("tempdir");
+    let home_a = dir.path().join("trust-a");
+    let home_b = dir.path().join("trust-b");
+    let control_port_a = free_port();
+    let control_port_b = free_port();
+    let p2p_port_a = free_port();
+    let p2p_port_b = free_port();
+    let config_a = AgentMeshConfig {
+        control_port: control_port_a,
+        p2p_port: p2p_port_a,
+        advertise_host: "127.0.0.1".to_string(),
+        agent_label: Some("alpha-trust".to_string()),
+        agent_description: Some("delegator".to_string()),
+        interests: vec!["mesh".to_string()],
+        bootstrap_urls: Vec::new(),
+        ..AgentMeshConfig::default()
+    };
+    let config_b = AgentMeshConfig {
+        control_port: control_port_b,
+        p2p_port: p2p_port_b,
+        advertise_host: "127.0.0.1".to_string(),
+        agent_label: Some("beta-trust".to_string()),
+        agent_description: Some("worker".to_string()),
+        interests: vec!["mesh".to_string()],
+        bootstrap_urls: Vec::new(),
+        cooperate_enabled: false,
+        executor_mode: "builtin".to_string(),
+        ..AgentMeshConfig::default()
+    };
+    let service_a = MeshService::bootstrap(&home_a, config_a)
+        .await
+        .expect("bootstrap a");
+    let service_b = MeshService::bootstrap(&home_b, config_b)
+        .await
+        .expect("bootstrap b");
+    service_a
+        .announce_to(Some(("127.0.0.1".to_string(), p2p_port_b)))
+        .await
+        .expect("dial b");
+    service_b
+        .announce_to(Some(("127.0.0.1".to_string(), p2p_port_a)))
+        .await
+        .expect("dial a");
+
+    wait_for("peer discovery", || async {
+        let peers_a = service_a.list_peers().await.expect("list peers a");
+        let peers_b = service_b.list_peers().await.expect("list peers b");
+        !peers_a.is_empty() && !peers_b.is_empty()
+    })
+    .await;
+
+    let peer_b = service_a
+        .list_peers()
+        .await
+        .expect("list peers a")
+        .into_iter()
+        .find(|peer| peer.agent_label.as_deref() == Some("beta-trust"))
+        .expect("beta visible");
+    let peer_a = service_b
+        .list_peers()
+        .await
+        .expect("list peers b")
+        .into_iter()
+        .find(|peer| peer.agent_label.as_deref() == Some("alpha-trust"))
+        .expect("alpha visible");
+
+    service_a
+        .delegate_work(DelegateWorkRequest {
+            peer_id: peer_b.peer_id.clone(),
+            capability: None,
+            task_type: "summary".to_string(),
+            instruction: "Trust this peer and execute".to_string(),
+            input: serde_json::json!({"headline":"whitelist path"}),
+            context: None,
+            max_output_chars: Some(200),
+        })
+        .await
+        .expect("delegate work");
+
+    let pending = loop {
+        let items = service_b
+            .list_pending_delegate_requests(20)
+            .await
+            .expect("pending list");
+        if let Some(item) = items.into_iter().find(|item| item.peer_id == peer_a.peer_id) {
+            break item;
+        }
+        sleep(Duration::from_millis(300)).await;
+    };
+    assert!(!pending.peer_has_capability_grant);
+
+    let decision = service_b
+        .approve_delegate_request(DelegateDecisionRequest {
+            message_id: pending.message_id,
+            reason: None,
+            always_allow: true,
+            grant_capability: None,
+            grant_note: Some("always allow alpha-trust".to_string()),
+        })
+        .await
+        .expect("approve pending with trust");
+
+    assert!(decision.grant_created);
+    assert_eq!(decision.granted_capability.as_deref(), Some("delegate_work"));
+
+    let grants = service_b.list_grants().await.expect("list grants");
+    assert!(grants.iter().any(|grant| {
+        grant.peer_id == peer_a.peer_id
+            && grant.capability == "delegate_work"
+            && grant.note.as_deref() == Some("always allow alpha-trust")
+    }));
 }
 
 async fn wait_for<F, Fut>(label: &str, mut check: F)

@@ -291,7 +291,16 @@ def mesh_accept_request(args: dict[str, Any] | None = None, **_meta: Any) -> str
     args = _normalize_args(args)
     client = _client()
     try:
-        return _json_result(client.accept_request({"message_id": args["message_id"]}))
+        return _json_result(
+            client.accept_request(
+                {
+                    "message_id": args["message_id"],
+                    "always_allow": args.get("always_allow", False),
+                    "grant_note": args.get("grant_note"),
+                    "grant_capability": args.get("grant_capability"),
+                }
+            )
+        )
     finally:
         client.close()
 
