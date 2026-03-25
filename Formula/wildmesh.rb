@@ -1,14 +1,14 @@
 class Wildmesh < Formula
   desc "Local-first peer-to-peer mesh for agents and agent harnesses"
   homepage "https://github.com/nativ3ai/wildmesh"
-  url "https://github.com/nativ3ai/wildmesh/archive/refs/tags/v0.3.4.tar.gz"
-  sha256 "4363f42fbd0832cec7058a0d52e25757557b4e7429043b79dacfd5c2566c4bcc"
+  url "https://github.com/nativ3ai/wildmesh/archive/refs/tags/v0.3.5.tar.gz"
+  sha256 "c6e655c134ceb1921c76e1f31ac4d4f954d4c1c784dcb4c903f647a329ec37e8"
   license "MIT"
   head "https://github.com/nativ3ai/wildmesh.git", branch: "main"
 
   bottle do
-    root_url "https://github.com/nativ3ai/wildmesh/releases/download/v0.3.4"
-    sha256 cellar: :any_skip_relocation, arm64_tahoe: "a063c927fbdbbd69d2401f79329c5ef7f8500cf0611b60960cbda7936fa55d95"
+    root_url "https://github.com/nativ3ai/wildmesh/releases/download/v0.3.5"
+    sha256 cellar: :any_skip_relocation, arm64_tahoe: "51159d980b6dc94a3453b035f00949f6b47dfb465985724ef40adf0eb0b49cb5"
   end
 
   depends_on "rust" => :build
