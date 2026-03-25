@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -12,6 +13,27 @@ DEFAULT_BOOTSTRAP_PEERS = [
     "/dnsaddr/bootstrap.libp2p.io/p2p/QmcZf59bWwK5XFi76CZX8cbJ4BhTzzA3gU1ZjYZcYW3dwt",
     "/ip4/104.131.131.82/tcp/4001/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ",
 ]
+
+
+def _is_default_home(home: Path) -> bool:
+    return home == (Path.home() / ".wildmesh")
+
+
+def _home_suffix(home: Path) -> int:
+    digest = hashlib.sha256(str(home).encode("utf-8")).digest()
+    return (int.from_bytes(digest[:8], "big") % 700) + 1
+
+
+def _apply_home_port_defaults(cfg: "AgentMeshConfig") -> "AgentMeshConfig":
+    if _is_default_home(cfg.home):
+        return cfg
+    suffix = _home_suffix(cfg.home)
+    if cfg.control_port == 8877 and cfg.p2p_port == 4500:
+        cfg.control_port = 8877 + suffix
+        cfg.p2p_port = 4500 + suffix
+        cfg.discovery_port = 45150 + suffix
+        cfg.public_api_port = 45200 + suffix
+    return cfg
 
 
 @dataclass(slots=True)
@@ -107,6 +129,7 @@ def load_config(home: Path | None = None) -> AgentMeshConfig:
     path = root / "config.json"
     if not path.exists():
         cfg = AgentMeshConfig(home=root, bootstrap_urls=DEFAULT_BOOTSTRAP_PEERS.copy(), interests=[])
+        cfg = _apply_home_port_defaults(cfg)
         cfg.persist()
         return cfg
     raw = json.loads(path.read_text())
@@ -124,4 +147,5 @@ def load_config(home: Path | None = None) -> AgentMeshConfig:
     raw.setdefault("executor_model", None)
     raw.setdefault("executor_api_key_env", None)
     raw.setdefault("artifact_inline_limit_bytes", 128 * 1024)
-    return AgentMeshConfig(home=root, **raw)
+    cfg = AgentMeshConfig(home=root, **raw)
+    return _apply_home_port_defaults(cfg)

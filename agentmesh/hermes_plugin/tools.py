@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from ..client import AgentMeshClient
+from ..config import load_config
 
 TOOLSET = "wildmesh"
 _SETUP_WAIT_ATTEMPTS = 10
@@ -59,14 +60,20 @@ def mesh_status(_args: dict[str, Any] | None = None, **_meta: Any) -> str:
     client = _client()
     try:
         status = client.status()
+        mesh_ready = bool(status.get("reachability", {}).get("mesh_worker_alive", False))
         return _json_result({
             "daemon_ready": True,
+            "mesh_ready": mesh_ready,
             "status": status,
             "profile": client.profile(),
+            "next_steps": [] if mesh_ready else [
+                "Use wildmesh_setup to repair and restart the current local node.",
+            ],
         })
     except Exception as exc:  # noqa: BLE001
         return _json_result({
             "daemon_ready": False,
+            "mesh_ready": False,
             "error": str(exc),
             "profile": _profile_snapshot(client),
             "next_steps": [
@@ -85,11 +92,17 @@ def mesh_profile(_args: dict[str, Any] | None = None, **_meta: Any) -> str:
         try:
             status = client.status()
             profile["daemon_ready"] = True
+            profile["mesh_ready"] = bool(status.get("reachability", {}).get("mesh_worker_alive", False))
             profile["reachability"] = status.get("reachability", {})
             profile["identity"] = status.get("identity", {})
             profile["queue"] = status.get("queue", {})
+            if not profile["mesh_ready"]:
+                profile["next_steps"] = [
+                    "Use wildmesh_setup to repair and restart the current local node.",
+                ]
         except Exception as exc:  # noqa: BLE001
             profile["daemon_ready"] = False
+            profile["mesh_ready"] = False
             profile["status_error"] = str(exc)
             profile["next_steps"] = [
                 "Use wildmesh_setup to initialize and start the local daemon.",
@@ -103,9 +116,15 @@ def mesh_profile(_args: dict[str, Any] | None = None, **_meta: Any) -> str:
 def mesh_setup(args: dict[str, Any] | None = None, **_meta: Any) -> str:
     payload = _normalize_args(args)
     binary = _binary_path()
-    label = payload.get("agent_label") or socket.gethostname()
-    description = payload.get("agent_description") or "WildMesh node managed through Hermes"
-    interests = payload.get("interests") or []
+    home = Path(payload["home"]) if payload.get("home") else None
+    cfg = load_config(home)
+    label = payload.get("agent_label") or cfg.agent_label or socket.gethostname()
+    description = (
+        payload.get("agent_description")
+        or cfg.agent_description
+        or "WildMesh node managed through Hermes"
+    )
+    interests = payload.get("interests") or cfg.interests or []
     if isinstance(interests, str):
         interests = [interests]
     command = [
@@ -118,8 +137,8 @@ def mesh_setup(args: dict[str, Any] | None = None, **_meta: Any) -> str:
         "--with-hermes",
         "false",
     ]
-    if payload.get("home"):
-        command.extend(["--home", str(payload["home"])])
+    if home:
+        command.extend(["--home", str(home)])
     if payload.get("control_port") is not None:
         command.extend(["--control-port", str(payload["control_port"])])
     if payload.get("p2p_port") is not None:
@@ -130,16 +149,20 @@ def mesh_setup(args: dict[str, Any] | None = None, **_meta: Any) -> str:
         command.extend(["--interest", str(interest)])
     for bootstrap_url in payload.get("bootstrap_urls") or []:
         command.extend(["--bootstrap-url", str(bootstrap_url)])
-    if payload.get("cooperate"):
+    if payload.get("cooperate") or cfg.cooperate_enabled:
         command.append("--cooperate")
-    if payload.get("executor_mode"):
-        command.extend(["--executor-mode", str(payload["executor_mode"])])
-    if payload.get("executor_url"):
-        command.extend(["--executor-url", str(payload["executor_url"])])
-    if payload.get("executor_model"):
-        command.extend(["--executor-model", str(payload["executor_model"])])
-    if payload.get("executor_api_key_env"):
-        command.extend(["--executor-api-key-env", str(payload["executor_api_key_env"])])
+    executor_mode = payload.get("executor_mode") or cfg.executor_mode
+    if executor_mode:
+        command.extend(["--executor-mode", str(executor_mode)])
+    executor_url = payload.get("executor_url") or cfg.executor_url
+    if executor_url:
+        command.extend(["--executor-url", str(executor_url)])
+    executor_model = payload.get("executor_model") or cfg.executor_model
+    if executor_model:
+        command.extend(["--executor-model", str(executor_model)])
+    executor_api_key_env = payload.get("executor_api_key_env") or cfg.executor_api_key_env
+    if executor_api_key_env:
+        command.extend(["--executor-api-key-env", str(executor_api_key_env)])
     command.extend(["--launch-agent", str(bool(payload.get("launch_agent", True))).lower()])
     if payload.get("hermes_home"):
         command.extend(["--hermes-home", str(payload["hermes_home"])])

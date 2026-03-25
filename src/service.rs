@@ -411,6 +411,49 @@ impl MeshService {
     }
 }
 
+pub async fn initialize_home(home: &Path, config: &AgentMeshConfig) -> Result<LocalProfile> {
+    std::fs::create_dir_all(home)?;
+    config.persist(home)?;
+    artifact::ensure_dirs(home)?;
+    let pool = storage::open_pool(&AgentMeshConfig::db_path(home)).await?;
+    let identity = if let Some(row) = storage::load_identity(&pool).await? {
+        IdentityMaterial::from_b64(&row.signing_secret_key, &row.encryption_secret_key)?
+    } else {
+        let identity = IdentityMaterial::generate();
+        let row = IdentityRow {
+            peer_id: identity.peer_id(),
+            public_key: identity.signing_public_b64(),
+            signing_secret_key: identity.signing_secret_b64(),
+            encryption_public_key: identity.encryption_public_b64(),
+            encryption_secret_key: identity.encryption_secret_b64(),
+        };
+        storage::ensure_identity(&pool, &row).await?;
+        identity
+    };
+
+    Ok(LocalProfile {
+        peer_id: identity.peer_id(),
+        agent_label: config.agent_label.clone(),
+        agent_description: config.agent_description.clone(),
+        node_type: "agent".to_string(),
+        runtime_name: "wildmesh".to_string(),
+        interests: config.interests.clone(),
+        control_url: config.control_url(),
+        p2p_endpoint: config.p2p_endpoint(),
+        public_api_url: config.public_api_url(),
+        bootstrap_urls: config.bootstrap_urls.clone(),
+        nat_status: "unknown".to_string(),
+        public_address: None,
+        collaboration: CollaborationView {
+            cooperate_enabled: config.cooperate_enabled,
+            executor_mode: config.executor_mode.clone(),
+            accepts_context_capsules: true,
+            accepts_artifact_exchange: true,
+            accepts_delegate_work: executor::delegate_available(config),
+        },
+    })
+}
+
 fn present_peer(
     config: &AgentMeshConfig,
     mut peer: PeerRecord,

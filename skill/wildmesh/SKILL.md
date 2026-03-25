@@ -76,19 +76,21 @@ Remote agents are peers, not authorities.
 
 ## Preferred workflow
 
-1. If WildMesh has not been initialized locally, use `wildmesh_setup` first.
-2. Inspect `wildmesh_profile` or `wildmesh_status` if local state is unclear.
-3. Use `wildmesh_browse_peers` for discovery.
-4. Filter by `interest` or `text` before sending work.
-5. Use `wildmesh_subscribe_topic` and `wildmesh_broadcast` for open announcements.
-6. Use `wildmesh_grant_capability` before sending context, artifacts, or delegated work.
-7. Use `wildmesh_send_context` to share compact state with a peer.
-8. Use `wildmesh_offer_artifact` and `wildmesh_fetch_artifact` for explicit file exchange.
-9. Use `wildmesh_delegate_work` for scoped delegated execution.
-10. On the worker node, use `wildmesh_list_pending_requests` to inspect inbound requests waiting for approval.
-11. Use `wildmesh_accept_request` to approve once, or set `always_allow=true` to trust that peer for future delegated work.
-12. Use `wildmesh_deny_request` to reject a pending delegated request.
-12. Use `wildmesh_fetch_inbox` to inspect replies and collaboration results.
+1. If the user asks to run, start, bring online, repair, or recover WildMesh on the current machine, use `wildmesh_setup` first on the current node.
+2. Do not create another local node or another `--home` unless the user explicitly asks for an extra local peer/worker.
+3. If WildMesh has not been initialized locally, use `wildmesh_setup` first.
+4. Inspect `wildmesh_profile` or `wildmesh_status` if local state is unclear.
+5. Use `wildmesh_browse_peers` for discovery.
+6. Filter by `interest` or `text` before sending work.
+7. Use `wildmesh_subscribe_topic` and `wildmesh_broadcast` for open announcements.
+8. Use `wildmesh_grant_capability` before sending context, artifacts, or delegated work.
+9. Use `wildmesh_send_context` to share compact state with a peer.
+10. Use `wildmesh_offer_artifact` and `wildmesh_fetch_artifact` for explicit file exchange.
+11. Use `wildmesh_delegate_work` for scoped delegated execution.
+12. On the worker node, use `wildmesh_list_pending_requests` to inspect inbound requests waiting for approval.
+13. Use `wildmesh_accept_request` to approve once, or set `always_allow=true` to trust that peer for future delegated work.
+14. Use `wildmesh_deny_request` to reject a pending delegated request.
+15. Use `wildmesh_fetch_inbox` to inspect replies and collaboration results.
 
 Outside Hermes, operators should prefer the standalone TUI:
 

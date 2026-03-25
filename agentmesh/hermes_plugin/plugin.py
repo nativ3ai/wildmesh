@@ -33,7 +33,7 @@ def register(ctx) -> None:
         toolset=TOOLSET,
         schema={
             "name": "wildmesh_setup",
-            "description": "Initialize or refresh the local WildMesh profile and start the daemon for this machine.",
+            "description": "Initialize, repair, or refresh the current local WildMesh node and start its daemon. Use this for the current machine; do not use it to create extra local peers unless the operator explicitly asks for another node/home.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -59,7 +59,7 @@ def register(ctx) -> None:
         handler=mesh_setup,
         check_fn=check_agentmesh_available,
         is_async=False,
-        description="Initialize or refresh the local WildMesh node and bring the daemon online.",
+        description="Initialize or repair the current local WildMesh node and bring the daemon online.",
         emoji="🛠️",
     )
     ctx.register_tool(
@@ -69,7 +69,7 @@ def register(ctx) -> None:
         handler=mesh_status,
         check_fn=check_agentmesh_available,
         is_async=False,
-        description="Inspect mesh identity, peers, and queue counts.",
+        description="Inspect whether the local WildMesh daemon is up and whether the mesh worker is actually live.",
         emoji="🕸️",
     )
     ctx.register_tool(
@@ -79,7 +79,7 @@ def register(ctx) -> None:
         handler=mesh_profile,
         check_fn=check_agentmesh_available,
         is_async=False,
-        description="Inspect local mesh profile metadata and bootstrap realm settings.",
+        description="Inspect local WildMesh profile metadata, bootstrap realm settings, and current mesh readiness.",
         emoji="🪪",
     )
     ctx.register_tool(

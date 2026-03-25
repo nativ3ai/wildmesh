@@ -105,6 +105,10 @@ wildmesh run --detach --home /tmp/wildmesh-peer2
 wildmesh dashboard --home /tmp/wildmesh-peer2
 ```
 
+For non-default homes, WildMesh derives a stable per-home port set
+automatically when you keep the standard defaults. That prevents local extra
+peers from colliding with the main node.
+
 That is useful for local and LAN interoperability tests. Once both daemons are
 up, the peers should appear in `browse`, `roam`, and the dashboard after a short
 discovery interval.

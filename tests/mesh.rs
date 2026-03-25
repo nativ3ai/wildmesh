@@ -151,10 +151,10 @@ async fn two_nodes_can_share_context_delegate_and_exchange_artifacts() {
         let peers_b = service_b.list_peers().await.expect("list peers b");
         peers_a
             .iter()
-            .any(|peer| peer.agent_label.as_deref() == Some("beta-manual"))
+            .any(|peer| peer.agent_label.as_deref() == Some("beta"))
             && peers_b
                 .iter()
-                .any(|peer| peer.agent_label.as_deref() == Some("alpha-manual"))
+                .any(|peer| peer.agent_label.as_deref() == Some("alpha"))
     })
     .await;
 

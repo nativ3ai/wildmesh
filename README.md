@@ -33,14 +33,14 @@ Tap formula:
 - [`homebrew-wildmesh`](https://github.com/nativ3ai/homebrew-wildmesh)
 
 Current release:
-- [`v0.3.5`](https://github.com/nativ3ai/wildmesh/releases/tag/v0.3.5)
+- [`v0.3.6`](https://github.com/nativ3ai/wildmesh/releases/tag/v0.3.6)
 
 ### Cargo
 
 Rust-native install fallback:
 
 ```bash
-cargo install --git https://github.com/nativ3ai/wildmesh --tag v0.3.5 wildmesh
+cargo install --git https://github.com/nativ3ai/wildmesh --tag v0.3.6 wildmesh
 ```
 
 ## One-command setup
@@ -63,6 +63,7 @@ What `setup` does:
 - creates local identity and state if missing
 - installs the Hermes plugin and skill by default
 - installs and starts a macOS `launchd` agent by default
+- repairs and restarts the current node cleanly if the control daemon is up but the mesh worker is dead
 - prints the local profile and next commands
 
 Common production flags:
@@ -124,6 +125,10 @@ wildmesh setup \
 wildmesh run --detach --home /tmp/wildmesh-peer2
 wildmesh dashboard --home /tmp/wildmesh-peer2
 ```
+
+If you use a non-default `--home` and do not manually assign ports, WildMesh now
+derives a stable port set for that home automatically. The default home keeps the
+standard ports.
 
 Local LAN discovery is enabled. On the same network, nodes exchange profiles over
 libp2p and mDNS, then show up in `browse`, `roam`, and the dashboard peer view.

@@ -1,6 +1,7 @@
 use std::env;
 use std::fs;
 use std::io::{self, BufRead, Write};
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -13,7 +14,7 @@ use tracing_subscriber::EnvFilter;
 
 use crate::api;
 use crate::config::AgentMeshConfig;
-use crate::service::MeshService;
+use crate::service::{MeshService, initialize_home};
 
 #[derive(Debug, Parser)]
 #[command(name = "wildmesh", version, about = "WildMesh CLI")]
@@ -405,14 +406,18 @@ pub async fn main_entry() -> Result<()> {
             hermes_home,
         } => {
             let home = home.unwrap_or_else(AgentMeshConfig::home_dir);
-            let mut config = if AgentMeshConfig::config_path(&home).exists() {
+            let config_exists = AgentMeshConfig::config_path(&home).exists();
+            let mut config = if config_exists {
                 AgentMeshConfig::load_or_create(&home)?
             } else {
                 AgentMeshConfig::default()
             };
-            config.control_port = control_port;
-            config.p2p_port = p2p_port;
-            config.advertise_host = advertise_host;
+            if !config_exists || control_port != 8877 || p2p_port != 4500 {
+                apply_home_port_defaults(&home, &mut config, control_port, p2p_port, None, None);
+            }
+            if !config_exists || advertise_host != "127.0.0.1" {
+                config.advertise_host = advertise_host;
+            }
             if let Some(agent_label) = agent_label {
                 config.agent_label = Some(agent_label);
             }
@@ -427,29 +432,49 @@ pub async fn main_entry() -> Result<()> {
             } else if config.bootstrap_urls.is_empty() {
                 config.bootstrap_urls = AgentMeshConfig::default_bootstrap_urls();
             }
-            config.cooperate_enabled = cooperate;
-            config.executor_mode = executor_mode;
-            config.executor_url = executor_url;
-            config.executor_model = executor_model;
-            config.executor_api_key_env = executor_api_key_env;
+            if cooperate {
+                config.cooperate_enabled = true;
+            } else if !config_exists {
+                config.cooperate_enabled = false;
+            }
+            if executor_mode != "disabled" || !config_exists {
+                config.executor_mode = executor_mode;
+            }
+            if executor_url.is_some() || !config_exists {
+                config.executor_url = executor_url;
+            }
+            if executor_model.is_some() || !config_exists {
+                config.executor_model = executor_model;
+            }
+            if executor_api_key_env.is_some() || !config_exists {
+                config.executor_api_key_env = executor_api_key_env;
+            }
             config.persist(&home)?;
-            let service = MeshService::bootstrap(&home, config.clone()).await?;
             if with_hermes {
                 install_hermes_plugin(&asset_root(), &hermes_home)?;
             }
+            if launch_agent {
+                stop_daemon_for_home(&home)?;
+            }
+            let profile = initialize_home(&home, &config).await?;
             let launch_agent_path = if launch_agent {
                 Some(install_launch_agent(&home)?)
             } else {
                 None
             };
             let daemon_ready = if launch_agent {
-                let mut ready =
-                    wait_for_daemon(&config.control_url(), std::time::Duration::from_secs(6)).await;
+                let mut ready = wait_for_healthy_daemon(
+                    &config.control_url(),
+                    std::time::Duration::from_secs(6),
+                )
+                .await;
                 if !ready {
                     let _ = spawn_detached_daemon(&home);
-                    ready =
-                        wait_for_daemon(&config.control_url(), std::time::Duration::from_secs(4))
-                            .await;
+                    ready = wait_for_healthy_daemon(
+                        &config.control_url(),
+                        std::time::Duration::from_secs(4),
+                    )
+                    .await;
                 }
                 ready
             } else {
@@ -461,7 +486,7 @@ pub async fn main_entry() -> Result<()> {
                     "status": "ready",
                     "product": "WildMesh",
                     "home": home,
-                    "profile": service.local_profile(),
+                    "profile": profile,
                     "with_hermes": with_hermes,
                     "hermes_home": hermes_home,
                     "launch_agent": launch_agent_path,
@@ -514,18 +539,18 @@ pub async fn main_entry() -> Result<()> {
             };
             let config = AgentMeshConfig {
                 control_host: "127.0.0.1".to_string(),
-                control_port,
+                control_port: 8877,
                 p2p_host: "0.0.0.0".to_string(),
-                p2p_port,
+                p2p_port: 4500,
                 advertise_host,
                 agent_label,
                 agent_description,
                 interests,
                 discovery_host,
-                discovery_port,
+                discovery_port: 45150,
                 discovery_broadcast_addr,
                 public_api_host,
-                public_api_port,
+                public_api_port: 45200,
                 bootstrap_urls,
                 announce_interval_secs,
                 relay_poll_interval_secs,
@@ -538,6 +563,15 @@ pub async fn main_entry() -> Result<()> {
                 executor_api_key_env,
                 ..AgentMeshConfig::default()
             };
+            let mut config = config;
+            apply_home_port_defaults(
+                &home,
+                &mut config,
+                control_port,
+                p2p_port,
+                Some(discovery_port),
+                Some(public_api_port),
+            );
             let service = MeshService::bootstrap(&home, config).await?;
             println!(
                 "{}",
@@ -548,9 +582,28 @@ pub async fn main_entry() -> Result<()> {
             let home = home.unwrap_or_else(AgentMeshConfig::home_dir);
             if detach {
                 let config = AgentMeshConfig::load_or_create(&home)?;
+                if let Some(status) = fetch_daemon_status(&config.control_url()).await {
+                    if mesh_worker_alive(&status) {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&json!({
+                                "status": "running",
+                                "home": home,
+                                "control_url": config.control_url(),
+                                "daemon_ready": true,
+                            }))?
+                        );
+                        return Ok(());
+                    }
+                    stop_daemon_for_home(&home)?;
+                    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                }
                 spawn_detached_daemon(&home)?;
-                let ready =
-                    wait_for_daemon(&config.control_url(), std::time::Duration::from_secs(6)).await;
+                let ready = wait_for_healthy_daemon(
+                    &config.control_url(),
+                    std::time::Duration::from_secs(6),
+                )
+                .await;
                 println!(
                     "{}",
                     serde_json::to_string_pretty(&json!({
@@ -1063,28 +1116,129 @@ async fn get_json(home: Option<PathBuf>, path: &str) -> Result<Value> {
         .await?)
 }
 
-async fn wait_for_daemon(control_url: &str, timeout: std::time::Duration) -> bool {
-    let deadline = std::time::Instant::now() + timeout;
-    let client = match Client::builder()
+async fn fetch_daemon_status(control_url: &str) -> Option<Value> {
+    let client = Client::builder()
         .timeout(std::time::Duration::from_secs(1))
         .build()
-    {
-        Ok(client) => client,
-        Err(_) => return false,
-    };
+        .ok()?;
+    client
+        .get(format!("{control_url}/v1/status"))
+        .send()
+        .await
+        .ok()?
+        .error_for_status()
+        .ok()?
+        .json::<Value>()
+        .await
+        .ok()
+}
+
+fn mesh_worker_alive(status: &Value) -> bool {
+    status
+        .get("reachability")
+        .and_then(|value| value.get("mesh_worker_alive"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+async fn wait_for_healthy_daemon(control_url: &str, timeout: std::time::Duration) -> bool {
+    let deadline = std::time::Instant::now() + timeout;
     while std::time::Instant::now() < deadline {
-        if client
-            .get(format!("{control_url}/v1/status"))
-            .send()
-            .await
-            .and_then(|response| response.error_for_status())
-            .is_ok()
-        {
-            return true;
+        if let Some(status) = fetch_daemon_status(control_url).await {
+            if mesh_worker_alive(&status) {
+                return true;
+            }
         }
         tokio::time::sleep(std::time::Duration::from_millis(250)).await;
     }
     false
+}
+
+fn is_default_home(home: &Path) -> bool {
+    let default = dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".wildmesh");
+    home == default || fs::canonicalize(home).ok() == fs::canonicalize(default).ok()
+}
+
+fn path_hash_suffix(path: &Path) -> u16 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    path.hash(&mut hasher);
+    ((hasher.finish() % 700) as u16) + 1
+}
+
+fn apply_home_port_defaults(
+    home: &Path,
+    config: &mut AgentMeshConfig,
+    control_port: u16,
+    p2p_port: u16,
+    discovery_port: Option<u16>,
+    public_api_port: Option<u16>,
+) {
+    if is_default_home(home) {
+        config.control_port = control_port;
+        config.p2p_port = p2p_port;
+        if let Some(value) = discovery_port {
+            config.discovery_port = value;
+        }
+        if let Some(value) = public_api_port {
+            config.public_api_port = value;
+        }
+        return;
+    }
+
+    let offset = path_hash_suffix(home);
+    let using_default_pair = control_port == 8877 && p2p_port == 4500;
+    config.control_port = if using_default_pair {
+        8877 + offset
+    } else {
+        control_port
+    };
+    config.p2p_port = if using_default_pair {
+        4500 + offset
+    } else {
+        p2p_port
+    };
+
+    match discovery_port {
+        Some(value) => config.discovery_port = value,
+        None if using_default_pair => config.discovery_port = 45150 + offset,
+        None => {}
+    }
+    match public_api_port {
+        Some(value) => config.public_api_port = value,
+        None if using_default_pair => config.public_api_port = 45200 + offset,
+        None => {}
+    }
+}
+
+fn daemon_match_pattern(home: &Path) -> String {
+    format!("wildmesh run --home {}", home.display())
+}
+
+fn stop_daemon_for_home(home: &Path) -> Result<()> {
+    let output = Command::new("pgrep")
+        .args(["-f", &daemon_match_pattern(home)])
+        .output();
+    let Ok(output) = output else {
+        return Ok(());
+    };
+    if !output.status.success() {
+        return Ok(());
+    }
+    let current_pid = std::process::id();
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        let Ok(pid) = line.trim().parse::<u32>() else {
+            continue;
+        };
+        if pid == current_pid {
+            continue;
+        }
+        let _ = Command::new("kill")
+            .args(["-TERM", &pid.to_string()])
+            .status();
+    }
+    Ok(())
 }
 
 fn spawn_detached_daemon(home: &Path) -> Result<()> {
@@ -1876,12 +2030,17 @@ fn install_launch_agent(home: &Path) -> Result<PathBuf> {
     #[cfg(target_os = "macos")]
     {
         let uid = current_uid()?;
+        let label = if is_default_home(home) {
+            "com.nativ3ai.wildmesh".to_string()
+        } else {
+            format!("com.nativ3ai.wildmesh.{}", path_hash_suffix(home))
+        };
         let launch_agents = dirs::home_dir()
             .context("resolve home directory")?
             .join("Library")
             .join("LaunchAgents");
         fs::create_dir_all(&launch_agents)?;
-        let plist_path = launch_agents.join("com.nativ3ai.wildmesh.plist");
+        let plist_path = launch_agents.join(format!("{label}.plist"));
         let binary = env::current_exe()
             .context("resolve current executable")?
             .canonicalize()
@@ -1892,7 +2051,7 @@ fn install_launch_agent(home: &Path) -> Result<PathBuf> {
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>com.nativ3ai.wildmesh</string>
+  <string>{}</string>
   <key>ProgramArguments</key>
   <array>
     <string>{}</string>
@@ -1913,6 +2072,7 @@ fn install_launch_agent(home: &Path) -> Result<PathBuf> {
 </dict>
 </plist>
 "#,
+            xml_escape(&label),
             xml_escape(&binary.display().to_string()),
             xml_escape(&home.display().to_string()),
             xml_escape(&home.display().to_string()),
@@ -1934,7 +2094,7 @@ fn install_launch_agent(home: &Path) -> Result<PathBuf> {
             [
                 "kickstart",
                 "-k",
-                &format!("{domain}/com.nativ3ai.wildmesh"),
+                &format!("{domain}/{label}"),
             ],
             true,
         );
