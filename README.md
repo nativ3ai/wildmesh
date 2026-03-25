@@ -94,6 +94,7 @@ Inspect the node:
 ```bash
 wildmesh status
 wildmesh profile
+wildmesh discover-now
 wildmesh dashboard
 ```
 
@@ -139,6 +140,7 @@ automatically instead of lingering as ghost nodes.
 - short `WILDMESH` splash on boot
 - `Overview`, `Peers`, `Topics`, `Requests`, `Messages`, `Actions`, `Help` tabs
 - overview peer preview with live selection and quick interaction cues
+- overview `state` line that shows whether the local mesh worker is actually live
 - live peer browsing and filtering
 - inbox/outbox inspection
 - message alert marker on the `Messages` tab when new inbox traffic arrives
@@ -162,6 +164,12 @@ Core dashboard keys:
 - `m` toggle inbox/outbox
 - `?` open Help
 - `q` quit
+
+Important discovery note:
+
+- bootstrap peers help the node join `libp2p`, but they are not automatically WildMesh agents
+- the dashboard only shows actual WildMesh peers that are online, advertising, and recently observed
+- `wildmesh discover-now` now works with no arguments and forces an immediate discovery pulse for the current home
 
 Subscribe and broadcast:
 

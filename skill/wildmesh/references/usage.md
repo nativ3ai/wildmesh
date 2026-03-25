@@ -64,6 +64,7 @@ Inspect the node:
 ```bash
 wildmesh status
 wildmesh profile
+wildmesh discover-now
 wildmesh dashboard
 ```
 
@@ -74,6 +75,8 @@ Reachability fields in `status`:
 - `listen_addrs`
 - `external_addrs`
 - `upnp_mapped_addrs`
+- `mesh_worker_alive`
+- `mesh_worker_error`
 
 Browse the mesh:
 
@@ -135,8 +138,15 @@ The dashboard overview now includes:
 
 - a live peer preview list using the current peer selection
 - clearer quick-start interaction hints
+- a `state` line so operators can tell whether the mesh worker is actually live
 - a message alert marker on the `Messages` tab when new inbox traffic arrives
 - a `Requests` tab for pending delegated work approvals
+
+Important discovery note:
+
+- bootstrap peers are routing infrastructure, not guaranteed WildMesh agents
+- the dashboard only lists real WildMesh peers that are online and advertising
+- `wildmesh discover-now` with no extra arguments forces an immediate discovery pulse for the active home
 
 Subscribe and broadcast:
 

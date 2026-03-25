@@ -985,18 +985,18 @@ pub async fn main_entry() -> Result<()> {
             if target_host.is_some() ^ target_port.is_some() {
                 bail!("--target-host and --target-port must be supplied together");
             }
+            let payload = match (target_host, target_port) {
+                (Some(host), Some(port)) => json!({
+                    "host": host,
+                    "port": port,
+                }),
+                (None, None) => json!({}),
+                _ => unreachable!("validated host/port pairing above"),
+            };
             println!(
                 "{}",
                 serde_json::to_string_pretty(
-                    &post_json(
-                        home,
-                        "/v1/discovery/announce",
-                        &json!({
-                            "host": target_host,
-                            "port": target_port,
-                        }),
-                    )
-                    .await?
+                    &post_json(home, "/v1/discovery/announce", &payload).await?
                 )?
             );
         }
@@ -1737,9 +1737,14 @@ async fn run_sidecar(home: Option<PathBuf>) -> Result<()> {
                 json!({"items": client.get(format!("{base}/v1/messages/outbox?limit={}", value.get("limit").and_then(Value::as_i64).unwrap_or(50))).send().await?.error_for_status()?.json::<Value>().await?})
             }
             Some("discover_now") => {
+                let payload = value
+                    .get("payload")
+                    .cloned()
+                    .filter(|item| !item.is_null())
+                    .unwrap_or_else(|| json!({}));
                 client
                     .post(format!("{base}/v1/discovery/announce"))
-                    .json(&value["payload"])
+                    .json(&payload)
                     .send()
                     .await?
                     .error_for_status()?

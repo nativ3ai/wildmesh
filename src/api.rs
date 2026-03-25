@@ -178,8 +178,14 @@ async fn broadcast(
 
 async fn discovery_announce(
     State(service): State<MeshService>,
-    Json(payload): Json<DiscoveryAnnounceRequest>,
+    payload: Option<Json<DiscoveryAnnounceRequest>>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, String)> {
+    let payload = payload
+        .map(|Json(value)| value)
+        .unwrap_or(DiscoveryAnnounceRequest {
+            host: None,
+            port: None,
+        });
     service
         .announce_to(match (payload.host, payload.port) {
             (Some(host), Some(port)) => Some((host, port)),

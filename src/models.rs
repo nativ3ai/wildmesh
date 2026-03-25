@@ -1,6 +1,10 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+fn default_mesh_worker_alive() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IdentityView {
     pub peer_id: String,
@@ -17,6 +21,10 @@ pub struct ReachabilityView {
     pub listen_addrs: Vec<String>,
     pub external_addrs: Vec<String>,
     pub upnp_mapped_addrs: Vec<String>,
+    #[serde(default = "default_mesh_worker_alive")]
+    pub mesh_worker_alive: bool,
+    #[serde(default)]
+    pub mesh_worker_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -236,7 +244,9 @@ pub struct DiscoveryPacket {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiscoveryAnnounceRequest {
+    #[serde(default)]
     pub host: Option<String>,
+    #[serde(default)]
     pub port: Option<u16>,
 }
 

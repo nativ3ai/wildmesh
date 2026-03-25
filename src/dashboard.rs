@@ -1150,6 +1150,13 @@ fn render_overview(frame: &mut Frame, area: Rect, app: &DashboardApp) {
 
     let profile = app.snapshot.profile.clone().unwrap_or_default();
     let status = app.snapshot.status.clone();
+    let worker_alive = status
+        .as_ref()
+        .map(|value| value.reachability.mesh_worker_alive)
+        .unwrap_or(false);
+    let worker_error = status
+        .as_ref()
+        .and_then(|value| value.reachability.mesh_worker_error.clone());
     let node_lines = vec![
         Line::from(vec![
             Span::styled("label ", neon(Color::LightGreen)),
@@ -1168,25 +1175,44 @@ fn render_overview(frame: &mut Frame, area: Rect, app: &DashboardApp) {
             Span::raw(profile.interests.join(", ")),
         ]),
         Line::from(vec![
+            Span::styled("state ", neon(Color::LightGreen)),
+            Span::raw(if worker_alive { "live" } else { "offline" }),
+        ]),
+        Line::from(vec![
             Span::styled("peer  ", neon(Color::LightGreen)),
             Span::raw(
                 status
                     .as_ref()
-                    .map(|value| value.identity.peer_id.clone())
+                    .map(|value| short_peer(&value.identity.peer_id))
                     .unwrap_or_else(|| "<offline>".to_string()),
             ),
         ]),
         Line::from(vec![
             Span::styled("p2p   ", neon(Color::LightGreen)),
-            Span::raw(profile.p2p_endpoint),
+            Span::raw(
+                status
+                    .as_ref()
+                    .map(|value| value.identity.p2p_endpoint.clone())
+                    .unwrap_or_else(|| profile.p2p_endpoint.clone()),
+            ),
         ]),
         Line::from(vec![
             Span::styled("ctrl  ", neon(Color::LightGreen)),
             Span::raw(profile.control_url),
         ]),
     ];
+    let mut node_text = Text::from(node_lines);
+    if let Some(err) = worker_error {
+        node_text.extend([
+            Line::default(),
+            Line::from(vec![
+                Span::styled("mesh  ", neon(Color::Red)),
+                Span::raw(err),
+            ]),
+        ]);
+    }
     frame.render_widget(
-        Paragraph::new(node_lines)
+        Paragraph::new(node_text)
             .block(block("NODE"))
             .wrap(Wrap { trim: true }),
         left[0],
@@ -1277,9 +1303,17 @@ fn render_overview(frame: &mut Frame, area: Rect, app: &DashboardApp) {
 
     let preview_peers = app.overview_preview_peers();
     let preview_items = if preview_peers.is_empty() {
-        vec![ListItem::new(
-            "No peers in view yet. Press d to pulse discovery.",
-        )]
+        if worker_alive {
+            vec![
+                ListItem::new("No WildMesh peers discovered yet. Press d to pulse discovery."),
+                ListItem::new("LAN peers appear quickly. Internet peers only show up when other live WildMesh nodes are advertising."),
+            ]
+        } else {
+            vec![
+                ListItem::new("Mesh worker is offline."),
+                ListItem::new("Run `wildmesh setup ...` or `wildmesh run` for this home before expecting peers."),
+            ]
+        }
     } else {
         preview_peers
             .iter()

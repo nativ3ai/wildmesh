@@ -310,6 +310,8 @@ struct ReachabilityRuntime {
     listen_addrs: Vec<String>,
     external_addrs: Vec<String>,
     upnp_mapped_addrs: Vec<String>,
+    mesh_worker_alive: bool,
+    mesh_worker_error: Option<String>,
 }
 
 impl ReachabilityRuntime {
@@ -320,6 +322,8 @@ impl ReachabilityRuntime {
             listen_addrs: self.listen_addrs,
             external_addrs: self.external_addrs,
             upnp_mapped_addrs: self.upnp_mapped_addrs,
+            mesh_worker_alive: self.mesh_worker_alive,
+            mesh_worker_error: self.mesh_worker_error,
         }
     }
 }
@@ -333,12 +337,14 @@ pub async fn spawn_swarm(
     let runtime_identity = load_or_create_transport_identity(home, app_identity)?;
     let reachability = Arc::new(RwLock::new(ReachabilityRuntime {
         nat_status: "unknown".to_string(),
+        mesh_worker_alive: true,
         ..ReachabilityRuntime::default()
     }));
     let (tx, rx) = mpsc::channel(128);
     let task_pool = pool.clone();
     let task_config = config.clone();
     let task_reachability = reachability.clone();
+    let task_reachability_error = reachability.clone();
     let task_home = home.to_path_buf();
     let task_tx = tx.clone();
     tokio::spawn(async move {
@@ -353,6 +359,9 @@ pub async fn spawn_swarm(
         )
         .await
         {
+            let mut runtime = task_reachability_error.write().expect("reachability lock");
+            runtime.mesh_worker_alive = false;
+            runtime.mesh_worker_error = Some(err.to_string());
             warn!(target: "agentmesh", error = %err, "libp2p swarm exited");
         }
     });
