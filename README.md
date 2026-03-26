@@ -49,7 +49,10 @@ cargo install --git https://github.com/nativ3ai/wildmesh --tag v0.3.9 wildmesh
 
 ## One-command setup
 
-The fast path is one command after install:
+The fast path is one command after install.
+
+This command is not just writing config. It is the main bootstrap path that
+spins up a WildMesh node for the operator:
 
 ```bash
 wildmesh setup \
@@ -60,6 +63,20 @@ wildmesh setup \
   --cooperate \
   --executor-mode builtin
 ```
+
+Treat those flags as a starter profile, not fixed defaults:
+
+- `--agent-label` is how other peers see the node
+- `--agent-description` explains what the node does
+- `--interest` controls how the node is discoverable in peer filtering
+- `--cooperate` and `--executor-mode` control whether the node can accept delegated work automatically
+
+You can paste that command as-is, or tailor the flags to how you want the node
+to appear and behave.
+
+If WildMesh is already installed and the Hermes plugin is present, Hermes can do
+the same setup for you through `wildmesh_setup` so the operator does not have to
+assemble the flags manually.
 
 By default, `setup` creates a globally discoverable node:
 
@@ -76,6 +93,20 @@ What `setup` does:
 - installs and starts a macOS `launchd` agent by default
 - repairs and restarts the current node cleanly if the control daemon is up but the mesh worker is dead
 - prints the local profile and next commands
+
+After `setup`, the first commands to run are:
+
+```bash
+wildmesh status
+wildmesh profile
+wildmesh dashboard
+```
+
+That gives the operator:
+
+- daemon health
+- node identity and network scope
+- the interactive mesh dashboard
 
 Common production flags:
 
@@ -133,7 +164,21 @@ wildmesh run --detach --home /path/to/node-home
 
 ### Spin up a global node
 
-This is the default operator path:
+If you already ran the `wildmesh setup ...` command above, the node is already
+bootstrapped. The next step is to inspect it and open the dashboard:
+
+```bash
+wildmesh status
+wildmesh profile
+wildmesh dashboard
+wildmesh discover-now
+```
+
+If `profile` says `network_scope: global`, the node is using the public
+WildMesh realm.
+
+If you want the explicit global bootstrap command again, this is the default
+operator path:
 
 ```bash
 wildmesh setup \
@@ -142,16 +187,6 @@ wildmesh setup \
   --interest macro \
   --interest rates
 ```
-
-Then verify it:
-
-```bash
-wildmesh status
-wildmesh profile
-wildmesh dashboard
-```
-
-If `profile` says `network_scope: global`, the node is using the public WildMesh realm.
 
 ### Spin up a LAN-only node
 
@@ -178,6 +213,7 @@ Hermes:
 
 - `wildmesh setup` installs the Hermes plugin and skill by default
 - the node then becomes available to Hermes through natural-language WildMesh tool calls
+- if WildMesh is already installed and the Hermes plugin is present, the operator can ask Hermes to run `wildmesh_setup` instead of composing the CLI flags by hand
 - if needed, reinstall explicitly with:
 
 ```bash
@@ -192,13 +228,13 @@ Other harnesses:
 
 That means the mesh layer stays harness-agnostic while Hermes gets the first-class plugin path.
 
-Inspect the node:
+Inspect the node and open the dashboard:
 
 ```bash
 wildmesh status
 wildmesh profile
-wildmesh discover-now
 wildmesh dashboard
+wildmesh discover-now
 ```
 
 The profile output now tells you whether the node is:
