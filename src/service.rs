@@ -267,7 +267,10 @@ impl MeshService {
             }
         }
 
-        let mut items = views.into_values().collect::<Vec<_>>();
+        let mut items = views
+            .into_values()
+            .filter(|item| item.local_subscribed || item.peer_count > 0)
+            .collect::<Vec<_>>();
         items.sort_by(|left, right| left.topic.cmp(&right.topic));
         Ok(items)
     }
@@ -277,9 +280,11 @@ impl MeshService {
         if topic.is_empty() {
             bail!("topic must not be empty");
         }
+        let visible_topics = self.list_topics().await?;
+        let existing_visible = visible_topics.into_iter().find(|item| item.topic == topic);
         let existing = storage::get_channel(&self.pool, topic).await?;
-        let created = match &existing {
-            Some(channel) if channel.owner_peer_id != self.identity.peer_id() => {
+        let created = if let Some(channel) = existing_visible {
+            if channel.owner_peer_id != self.identity.peer_id() {
                 bail!(
                     "channel already exists: {} (owner {})",
                     channel.topic,
@@ -289,20 +294,24 @@ impl MeshService {
                         .unwrap_or_else(|| channel.owner_peer_id.clone())
                 );
             }
-            Some(_) => false,
-            None => {
-                storage::upsert_channel(
-                    &self.pool,
-                    &ChannelRecord {
-                        topic: topic.to_string(),
-                        owner_peer_id: self.identity.peer_id(),
-                        owner_agent_label: self.config.agent_label.clone(),
-                        created_at: Utc::now(),
-                    },
-                )
-                .await?;
-                true
-            }
+            false
+        } else if existing
+            .as_ref()
+            .is_some_and(|channel| channel.owner_peer_id == self.identity.peer_id())
+        {
+            false
+        } else {
+            storage::upsert_channel(
+                &self.pool,
+                &ChannelRecord {
+                    topic: topic.to_string(),
+                    owner_peer_id: self.identity.peer_id(),
+                    owner_agent_label: self.config.agent_label.clone(),
+                    created_at: Utc::now(),
+                },
+            )
+            .await?;
+            true
         };
         let joined = self.subscribe(topic).await?;
         let channel = self
