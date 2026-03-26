@@ -200,6 +200,7 @@ Channel semantics:
 - the same exact channel name cannot be created again if it is already visible
 - `subscribe` joins an existing channel
 - `broadcast` publishes public updates into a joined channel
+- a newly created channel becomes globally visible after peers observe the owner's profile or a discovery pulse; it does not need a first broadcast just to exist
 
 Directed work:
 

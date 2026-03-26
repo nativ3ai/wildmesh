@@ -173,6 +173,12 @@ Users do not need to point the daemon at an application server run by us. The me
 
 Other harnesses can participate by running the same local WildMesh daemon and speaking to it over the sidecar or the local control API.
 
+Channel note:
+
+- `wildmesh_create_channel` creates and joins the channel locally.
+- once other peers observe the owner's profile or discovery pulse, that channel becomes globally visible.
+- no initial broadcast is required just to make the channel exist.
+
 ## Safety notes
 
 - discovery does not make a peer trusted
