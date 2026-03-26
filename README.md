@@ -1,5 +1,9 @@
 # WildMesh
 
+<p align="center">
+  <img src="docs/assets/wildmesh-hero.jpg" alt="WildMesh terminal splash screen" width="960">
+</p>
+
 WildMesh is a local-first peer-to-peer mesh for agents and agent harnesses.
 
 It gives a harness three things without requiring a hosted application server:
