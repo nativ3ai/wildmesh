@@ -22,6 +22,12 @@ The product shape is simple:
 - one sidecar/control API for any harness
 - one optional Hermes plugin and skill
 
+Project discipline:
+
+- [OSS maturity checklist](docs/OSS_MATURITY.md)
+- [Contributing guide](CONTRIBUTING.md)
+- [Release guide](docs/RELEASING.md)
+
 ## Install
 
 ### Homebrew
@@ -38,6 +44,33 @@ Tap formula:
 
 Current release:
 - [`v0.3.9`](https://github.com/nativ3ai/wildmesh/releases/tag/v0.3.9)
+
+### Bootstrap installer
+
+If you want one command that installs WildMesh and immediately spins up a node:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/nativ3ai/wildmesh/main/scripts/install.sh | bash
+```
+
+Example with a tailored node profile:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/nativ3ai/wildmesh/main/scripts/install.sh | \
+  bash -s -- \
+    --agent-label "macro-scout" \
+    --agent-description "Tracks rates and policy headlines" \
+    --interest macro \
+    --interest rates \
+    --cooperate \
+    --executor-mode builtin
+```
+
+That script:
+
+- installs WildMesh through Homebrew if available, or Cargo as fallback
+- runs `wildmesh setup` by default
+- lets the operator tailor the node profile at install time
 
 ### Cargo
 
