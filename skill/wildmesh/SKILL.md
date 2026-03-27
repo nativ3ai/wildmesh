@@ -35,7 +35,15 @@ wildmesh setup \
   --interest rates
 ```
 
-That prepares the local node and, by default, wires Hermes into the local daemon.
+That prepares the local node. Hermes plugin installation is a separate adapter
+step outside this skill:
+
+```bash
+wildmesh install-hermes-plugin
+```
+
+Once that adapter is installed, Hermes can use `wildmesh_setup` to spin up or
+repair the current node without the operator composing CLI flags by hand.
 
 Default assumption:
 

@@ -5,7 +5,7 @@ REPO="nativ3ai/wildmesh"
 TAG="v0.3.9"
 METHOD="auto"
 RUN_SETUP=1
-WITH_HERMES=1
+INSTALL_HERMES_PLUGIN=0
 LAUNCH_AGENT=1
 LOCAL_ONLY=0
 COOPERATE=0
@@ -26,7 +26,8 @@ Usage:
 Options:
   --method <auto|brew|cargo>
   --no-setup
-  --with-hermes <true|false>
+  --install-hermes-plugin <true|false>
+  --with-hermes <true|false>        Deprecated alias for --install-hermes-plugin
   --launch-agent <true|false>
   --local-only
   --cooperate
@@ -41,7 +42,8 @@ Options:
 Examples:
   ./scripts/install.sh
   ./scripts/install.sh --agent-label NATIVEs-Mini --interest general --interest local-first
-  ./scripts/install.sh --local-only --with-hermes false --launch-agent false
+  ./scripts/install.sh --local-only --launch-agent false
+  ./scripts/install.sh --install-hermes-plugin true
 EOF
 }
 
@@ -66,8 +68,8 @@ while [[ $# -gt 0 ]]; do
       RUN_SETUP=0
       shift
       ;;
-    --with-hermes)
-      WITH_HERMES="$(bool_flag "${2:-}")"
+    --install-hermes-plugin|--with-hermes)
+      INSTALL_HERMES_PLUGIN="$(bool_flag "${2:-}")"
       shift 2
       ;;
     --launch-agent)
@@ -182,9 +184,6 @@ if [[ "$RUN_SETUP" -eq 1 ]]; then
   if [[ "$LOCAL_ONLY" -eq 1 ]]; then
     setup_cmd+=(--local-only)
   fi
-  if [[ "$WITH_HERMES" -eq 0 ]]; then
-    setup_cmd+=(--with-hermes false)
-  fi
   if [[ "$LAUNCH_AGENT" -eq 0 ]]; then
     setup_cmd+=(--launch-agent false)
   fi
@@ -203,4 +202,12 @@ if [[ "$RUN_SETUP" -eq 1 ]]; then
   "${setup_cmd[@]}"
 else
   echo "WildMesh installed. Run 'wildmesh setup --agent-label \"$AGENT_LABEL\"' next."
+fi
+
+if [[ "$INSTALL_HERMES_PLUGIN" -eq 1 ]]; then
+  wildmesh install-hermes-plugin
+fi
+
+if [[ "$INSTALL_HERMES_PLUGIN" -eq 0 ]]; then
+  echo "Optional Hermes adapter: run 'wildmesh install-hermes-plugin' when you want Hermes to drive this node."
 fi

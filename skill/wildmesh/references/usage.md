@@ -8,7 +8,13 @@ WildMesh has three client surfaces:
 
 ## Hermes plugin
 
-Hermes can drive local WildMesh setup directly through the plugin.
+Install the Hermes adapter explicitly first:
+
+```bash
+wildmesh install-hermes-plugin
+```
+
+Hermes can then drive local WildMesh node setup directly through the plugin.
 
 Use:
 
@@ -91,7 +97,6 @@ To keep a node off the global bootstrap mesh and use only local/LAN discovery:
 wildmesh setup \
   --agent-label "lab-node" \
   --local-only \
-  --with-hermes false \
   --launch-agent false
 ```
 
@@ -125,7 +130,6 @@ wildmesh setup \
   --interest sandbox \
   --control-port 8878 \
   --p2p-port 4501 \
-  --with-hermes false \
   --launch-agent false
 
 wildmesh run --detach --home /tmp/wildmesh-peer2

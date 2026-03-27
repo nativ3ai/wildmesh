@@ -1,7 +1,7 @@
 use std::env;
 use std::fs;
-use std::io::{self, BufRead, Write};
 use std::hash::{Hash, Hasher};
+use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -54,11 +54,11 @@ pub enum Commands {
         executor_model: Option<String>,
         #[arg(long)]
         executor_api_key_env: Option<String>,
-        #[arg(long, default_value_t = true, action = ArgAction::Set)]
+        #[arg(long, hide = true, default_value_t = false, action = ArgAction::Set)]
         with_hermes: bool,
         #[arg(long, default_value_t = true, action = ArgAction::Set)]
         launch_agent: bool,
-        #[arg(long, default_value_os_t = hermes_home())]
+        #[arg(long, hide = true, default_value_os_t = hermes_home())]
         hermes_home: PathBuf,
     },
     Init {
@@ -514,8 +514,18 @@ pub async fn main_entry() -> Result<()> {
                     "product": "WildMesh",
                     "home": home,
                     "profile": profile,
-                    "with_hermes": with_hermes,
-                    "hermes_home": hermes_home,
+                    "integration": {
+                        "hermes_plugin_installed": with_hermes,
+                        "hermes_home": hermes_home,
+                        "hermes_next": if with_hermes {
+                            Value::Null
+                        } else {
+                            Value::String(format!(
+                                "wildmesh install-hermes-plugin --hermes-home {}",
+                                hermes_home.display()
+                            ))
+                        }
+                    },
                     "launch_agent": launch_agent_path,
                     "daemon_ready": daemon_ready,
                     "next": if launch_agent {
@@ -1030,7 +1040,10 @@ pub async fn main_entry() -> Result<()> {
         }
         Commands::Pending { limit, home } => {
             let url = format!("/v1/delegate/pending?limit={}", limit.clamp(1, 200));
-            println!("{}", serde_json::to_string_pretty(&get_json(home, &url).await?)?);
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&get_json(home, &url).await?)?
+            );
         }
         Commands::AcceptRequest {
             message_id,
@@ -2035,8 +2048,11 @@ fn install_hermes_plugin(asset_root: &Path, hermes_home: &Path) -> Result<()> {
         remove_path(&skill_target)?;
     }
     fs::create_dir_all(&plugin_target)?;
-    fs::copy(asset_root.join("__init__.py"), plugin_target.join("__init__.py"))
-        .context("copy plugin __init__.py")?;
+    fs::copy(
+        asset_root.join("__init__.py"),
+        plugin_target.join("__init__.py"),
+    )
+    .context("copy plugin __init__.py")?;
     fs::copy(
         asset_root.join("plugin.yaml"),
         plugin_target.join("plugin.yaml"),
@@ -2054,6 +2070,10 @@ fn install_hermes_plugin(asset_root: &Path, hermes_home: &Path) -> Result<()> {
     copy_dir_all(&asset_root.join("skill").join("wildmesh"), &skill_target)?;
     println!("installed plugin -> {}", plugin_target.display());
     println!("installed skill -> {}", skill_target.display());
+    println!("next -> restart Hermes if it is already running");
+    println!(
+        "inside Hermes -> ask it to run `Use WildMesh to set up the local node.`"
+    );
     Ok(())
 }
 
@@ -2069,21 +2089,38 @@ mod cli_tests {
         let hermes_home = tempdir().expect("hermes home");
         let root = assets.path();
 
-        fs::write(root.join("__init__.py"), "from .plugin import register\n").expect("write root init");
-        fs::write(root.join("plugin.py"), "from .agentmesh.plugin import register\n").expect("write root plugin");
+        fs::write(root.join("__init__.py"), "from .plugin import register\n")
+            .expect("write root init");
+        fs::write(
+            root.join("plugin.py"),
+            "from .agentmesh.plugin import register\n",
+        )
+        .expect("write root plugin");
         fs::write(root.join("plugin.yaml"), "name: wildmesh\n").expect("write manifest");
 
         let package_dir = root.join("agentmesh");
         let hermes_plugin_dir = package_dir.join("hermes_plugin");
         fs::create_dir_all(&hermes_plugin_dir).expect("create agentmesh tree");
-        fs::write(package_dir.join("__init__.py"), "from .hermes_plugin.plugin import register\n")
-            .expect("write package init");
-        fs::write(package_dir.join("plugin.py"), "from .hermes_plugin.plugin import register\n")
-            .expect("write package plugin");
-        fs::write(hermes_plugin_dir.join("__init__.py"), "from .plugin import register\n")
-            .expect("write hermes plugin init");
-        fs::write(hermes_plugin_dir.join("plugin.py"), "def register(ctx):\n    return None\n")
-            .expect("write hermes plugin register");
+        fs::write(
+            package_dir.join("__init__.py"),
+            "from .hermes_plugin.plugin import register\n",
+        )
+        .expect("write package init");
+        fs::write(
+            package_dir.join("plugin.py"),
+            "from .hermes_plugin.plugin import register\n",
+        )
+        .expect("write package plugin");
+        fs::write(
+            hermes_plugin_dir.join("__init__.py"),
+            "from .plugin import register\n",
+        )
+        .expect("write hermes plugin init");
+        fs::write(
+            hermes_plugin_dir.join("plugin.py"),
+            "def register(ctx):\n    return None\n",
+        )
+        .expect("write hermes plugin register");
 
         let skill_dir = root.join("skill").join("wildmesh");
         fs::create_dir_all(&skill_dir).expect("create skill tree");
@@ -2179,14 +2216,7 @@ fn install_launch_agent(home: &Path) -> Result<PathBuf> {
             false,
         )
         .context("run launchctl bootstrap")?;
-        let _ = run_launchctl(
-            [
-                "kickstart",
-                "-k",
-                &format!("{domain}/{label}"),
-            ],
-            true,
-        );
+        let _ = run_launchctl(["kickstart", "-k", &format!("{domain}/{label}")], true);
         Ok(plist_path)
     }
     #[cfg(not(target_os = "macos"))]

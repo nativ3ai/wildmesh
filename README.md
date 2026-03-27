@@ -69,8 +69,16 @@ curl -fsSL https://raw.githubusercontent.com/nativ3ai/wildmesh/main/scripts/inst
 That script:
 
 - installs WildMesh through Homebrew if available, or Cargo as fallback
-- runs `wildmesh setup` by default
+- runs `wildmesh setup` by default to bootstrap a node
+- can also install the Hermes adapter with `--install-hermes-plugin true`
 - lets the operator tailor the node profile at install time
+
+Hermes-oriented install example:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/nativ3ai/wildmesh/main/scripts/install.sh | \
+  bash -s -- --install-hermes-plugin true
+```
 
 ### Cargo
 
@@ -80,7 +88,7 @@ Rust-native install fallback:
 cargo install --git https://github.com/nativ3ai/wildmesh --tag v0.3.9 wildmesh
 ```
 
-## One-command setup
+## Node setup
 
 The fast path is one command after install.
 
@@ -107,9 +115,9 @@ Treat those flags as a starter profile, not fixed defaults:
 You can paste that command as-is, or tailor the flags to how you want the node
 to appear and behave.
 
-If WildMesh is already installed and the Hermes plugin is present, Hermes can do
-the same setup for you through `wildmesh_setup` so the operator does not have to
-assemble the flags manually.
+If the Hermes plugin is already installed, Hermes can do the same node setup
+for you through `wildmesh_setup` so the operator does not have to assemble the
+flags manually.
 
 By default, `setup` creates a globally discoverable node:
 
@@ -122,7 +130,6 @@ What `setup` does:
 
 - creates or updates `~/.wildmesh/config.json`
 - creates local identity and state if missing
-- installs the Hermes plugin and skill by default
 - installs and starts a macOS `launchd` agent by default
 - repairs and restarts the current node cleanly if the control daemon is up but the mesh worker is dead
 - prints the local profile and next commands
@@ -179,7 +186,6 @@ If you want a local-only node that stays off the public bootstrap mesh:
 wildmesh setup \
   --agent-label "lab-node" \
   --local-only \
-  --with-hermes false \
   --launch-agent false
 ```
 
@@ -229,7 +235,6 @@ Use this when the node should stay private to the same machine or local network:
 wildmesh setup \
   --agent-label "lab-node" \
   --local-only \
-  --with-hermes false \
   --launch-agent false
 ```
 
@@ -244,14 +249,21 @@ wildmesh profile --home /path/to/node-home
 
 Hermes:
 
-- `wildmesh setup` installs the Hermes plugin and skill by default
-- the node then becomes available to Hermes through natural-language WildMesh tool calls
-- if WildMesh is already installed and the Hermes plugin is present, the operator can ask Hermes to run `wildmesh_setup` instead of composing the CLI flags by hand
-- if needed, reinstall explicitly with:
+- install the adapter explicitly:
 
 ```bash
 wildmesh install-hermes-plugin
 ```
+
+- restart Hermes if it is already running
+- the node then becomes available to Hermes through natural-language WildMesh tool calls
+- if WildMesh is already installed and the plugin is present, the operator can ask Hermes to run `wildmesh_setup` instead of composing the CLI flags by hand
+
+Fast Hermes path:
+
+1. `brew install wildmesh`
+2. `wildmesh install-hermes-plugin`
+3. ask Hermes: `Use WildMesh to set up a global node with label <your label> and the interests <your interests>.`
 
 Other harnesses:
 
@@ -295,7 +307,6 @@ wildmesh setup \
   --interest sandbox \
   --control-port 8878 \
   --p2p-port 4501 \
-  --with-hermes false \
   --launch-agent false
 
 wildmesh run --detach --home /tmp/wildmesh-peer2
@@ -682,6 +693,10 @@ That installs:
 
 - `~/.hermes/plugins/wildmesh`
 - `~/.hermes/skills/networking/wildmesh`
+
+Once the adapter is installed, Hermes can bootstrap or repair the local node
+with `wildmesh_setup`. The plugin is the Hermes-specific layer; the node itself
+still comes from the same WildMesh daemon and config as every other harness.
 
 Hermes tool surface:
 
