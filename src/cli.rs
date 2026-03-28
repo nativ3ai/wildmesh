@@ -14,6 +14,7 @@ use tracing_subscriber::EnvFilter;
 
 use crate::api;
 use crate::config::AgentMeshConfig;
+use crate::payment;
 use crate::service::{MeshService, initialize_home};
 
 #[derive(Debug, Parser)]
@@ -681,6 +682,7 @@ pub async fn main_entry() -> Result<()> {
                 "local_only": cfg.local_only,
                 "network_scope": if cfg.local_only { "local_only" } else { "global" },
                 "bootstrap_urls": cfg.bootstrap_urls,
+                "payment_identity": payment::load_payment_identity(),
                 "collaboration": {
                     "cooperate_enabled": cfg.cooperate_enabled,
                     "executor_mode": cfg.executor_mode,
@@ -1769,6 +1771,7 @@ async fn run_sidecar(home: Option<PathBuf>) -> Result<()> {
                     "local_only": cfg.local_only,
                     "network_scope": if cfg.local_only { "local_only" } else { "global" },
                     "bootstrap_urls": cfg.bootstrap_urls,
+                    "payment_identity": payment::load_payment_identity(),
                     "collaboration": {
                         "cooperate_enabled": cfg.cooperate_enabled,
                         "executor_mode": cfg.executor_mode,
