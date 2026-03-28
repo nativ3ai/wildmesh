@@ -1407,6 +1407,34 @@ fn render_profile(profile: &Value) -> String {
         .get("public_address")
         .and_then(Value::as_str)
         .unwrap_or("<none>");
+    let payment_identity = profile
+        .get("payment_identity")
+        .and_then(Value::as_object)
+        .map(|value| {
+            let address = value
+                .get("address")
+                .and_then(Value::as_str)
+                .unwrap_or("<unknown>");
+            let chain = value.get("chain").and_then(Value::as_str).unwrap_or("base");
+            let network = value
+                .get("network")
+                .and_then(Value::as_str)
+                .unwrap_or("mainnet");
+            let rails = value
+                .get("settlement_rails")
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .filter(|joined| !joined.is_empty())
+                .unwrap_or_else(|| "usdc".to_string());
+            format!("{address} ({chain}/{network}; rails: {rails})")
+        })
+        .unwrap_or_else(|| "<none>".to_string());
     let collaboration = profile
         .get("collaboration")
         .cloned()
@@ -1420,7 +1448,7 @@ fn render_profile(profile: &Value) -> String {
         .and_then(Value::as_str)
         .unwrap_or("disabled");
     format!(
-        "agent_label: {label}\nagent_description: {description}\ninterests: {interests}\nnetwork_scope: {network_scope}\ncontrol_url: {}\np2p_endpoint: {}\npublic_api_url: {}\nbootstrap_urls: {bootstrap_urls}\nnat_status: {nat_status}\npublic_address: {public_address}\ncooperate_enabled: {cooperate_enabled}\nexecutor_mode: {executor_mode}",
+        "agent_label: {label}\nagent_description: {description}\ninterests: {interests}\nnetwork_scope: {network_scope}\ncontrol_url: {}\np2p_endpoint: {}\npublic_api_url: {}\nbootstrap_urls: {bootstrap_urls}\nnat_status: {nat_status}\npublic_address: {public_address}\npayment_identity: {payment_identity}\ncooperate_enabled: {cooperate_enabled}\nexecutor_mode: {executor_mode}",
         profile
             .get("control_url")
             .and_then(Value::as_str)

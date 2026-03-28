@@ -6,6 +6,7 @@ pub mod crypto;
 pub mod dashboard;
 pub mod executor;
 pub mod models;
+pub mod payment;
 pub mod service;
 pub mod storage;
 pub mod swarm;

@@ -14,10 +14,11 @@ use crate::models::{
     ArtifactRecord, BroadcastRequest, BroadcastResponse, CapabilityGrant, ChannelRecord,
     CollaborationView, ContextCapsuleBody, ContextCapsuleRequest, CooperateConfigRequest,
     CreateChannelResponse, DelegateDecisionRequest, DelegateDecisionResponse, DelegateRequestBody,
-    DelegateWorkRequest, Envelope, IdentityView, LocalProfile, MessageKind,
-    PendingDelegateRequest, PeerRecord, SendMessageRequest, SendMessageResponse, StatusResponse,
-    StoredMessage, SubscriptionRecord, TopicMember, TopicView,
+    DelegateWorkRequest, Envelope, IdentityView, LocalProfile, MessageKind, PeerRecord,
+    PendingDelegateRequest, SendMessageRequest, SendMessageResponse, StatusResponse, StoredMessage,
+    SubscriptionRecord, TopicMember, TopicView,
 };
+use crate::payment;
 use crate::storage::{self, IdentityRow};
 use crate::swarm::{SwarmHandle, spawn_swarm};
 
@@ -51,6 +52,7 @@ impl MeshService {
             agent_description: self.config.agent_description.clone(),
             node_type: Some("agent".to_string()),
             runtime_name: Some("wildmesh".to_string()),
+            payment_identity: payment::load_payment_identity(),
             interests: self.config.interests.clone(),
             host: self.config.advertise_host.clone(),
             port: self.config.p2p_port,
@@ -91,6 +93,7 @@ impl MeshService {
             bootstrap_urls: self.config.bootstrap_urls.clone(),
             nat_status: reachability.nat_status,
             public_address: reachability.public_address,
+            payment_identity: payment::load_payment_identity(),
             collaboration: self.collaboration_view(),
         }
     }
@@ -596,6 +599,7 @@ pub async fn initialize_home(home: &Path, config: &AgentMeshConfig) -> Result<Lo
         bootstrap_urls: config.bootstrap_urls.clone(),
         nat_status: "unknown".to_string(),
         public_address: None,
+        payment_identity: payment::load_payment_identity(),
         collaboration: CollaborationView {
             cooperate_enabled: config.cooperate_enabled,
             executor_mode: config.executor_mode.clone(),
@@ -647,6 +651,7 @@ mod tests {
             agent_description: Some("peer".to_string()),
             node_type: Some("agent".to_string()),
             runtime_name: Some("wildmesh".to_string()),
+            payment_identity: None,
             interests: vec!["mesh".to_string()],
             host: "192.168.1.10".to_string(),
             port: 4500,

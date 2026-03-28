@@ -8,6 +8,34 @@ import httpx
 from .config import load_config
 
 
+def _load_payment_identity() -> dict[str, Any] | None:
+    home = Path(os.environ.get("WILDADDY_HOME", Path.home() / ".wildaddy"))
+    path = home / "config.json"
+    if not path.exists():
+        return None
+    try:
+        raw = json.loads(path.read_text())
+    except Exception:
+        return None
+    relay = raw.get("relay") or {}
+    relay_path = relay.get("path")
+    relay_installed = bool(relay_path and Path(relay_path).exists())
+    rails = ["usdc"]
+    if relay_installed:
+        rails.append("cctp")
+    return {
+        "provider": "wildaddy",
+        "kind": "evm_wallet",
+        "address": raw.get("address"),
+        "chain": raw.get("chain") or "base",
+        "network": raw.get("network") or "mainnet",
+        "rpc_url": raw.get("rpcUrl"),
+        "relay_installed": relay_installed,
+        "relay_path": relay_path,
+        "settlement_rails": rails,
+    }
+
+
 class AgentMeshClient:
     def __init__(self, base_url: str | None = None, home: Path | None = None):
         self.home = home
@@ -36,6 +64,7 @@ class AgentMeshClient:
             "local_only": bool(getattr(cfg, "local_only", False)),
             "network_scope": "local_only" if bool(getattr(cfg, "local_only", False)) else "global",
             "bootstrap_urls": cfg.bootstrap_urls or [],
+            "payment_identity": _load_payment_identity(),
             "collaboration": {
                 "cooperate_enabled": cfg.cooperate_enabled,
                 "executor_mode": cfg.executor_mode,

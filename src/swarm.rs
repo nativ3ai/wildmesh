@@ -32,11 +32,11 @@ use crate::executor;
 use crate::models::{
     ArtifactFetchBody, ArtifactPayloadBody, BroadcastDelivery, BroadcastRequest, BroadcastResponse,
     DelegateDecisionResponse, DelegateRequestBody, DelegateResultBody, Envelope, LocalProfile,
-    MeshDirectRequest, MeshDirectResponse, MeshProfileRecord, MeshPubsubMessage,
-    MessageDirection, MessageKind, MessageStatus, PeerRecord, ReachabilityView,
-    SendMessageResponse, StoredMessage,
+    MeshDirectRequest, MeshDirectResponse, MeshProfileRecord, MeshPubsubMessage, MessageDirection,
+    MessageKind, MessageStatus, PeerRecord, ReachabilityView, SendMessageResponse, StoredMessage,
     SubscriptionRecord,
 };
+use crate::payment;
 use crate::storage;
 
 const PROFILE_TOPIC: &str = "agentmesh.profile.v1";
@@ -638,7 +638,9 @@ async fn handle_command(
                             deliveries.push(BroadcastDelivery {
                                 peer_id: peer.peer_id,
                                 delivery_status: "unreachable".to_string(),
-                                reason: Some("channel member is not currently dialable".to_string()),
+                                reason: Some(
+                                    "channel member is not currently dialable".to_string(),
+                                ),
                             });
                             continue;
                         };
@@ -1174,6 +1176,7 @@ async fn local_profile_record(state: &RuntimeState) -> Result<MeshProfileRecord>
         agent_description: state.config.agent_description.clone(),
         node_type: Some("agent".to_string()),
         runtime_name: Some("wildmesh".to_string()),
+        payment_identity: payment::load_payment_identity(),
         interests: state.config.interests.clone(),
         host: state.config.advertise_host.clone(),
         port: state.config.p2p_port,
@@ -1412,6 +1415,7 @@ mod tests {
             agent_description: Some("peer".to_string()),
             node_type: Some("agent".to_string()),
             runtime_name: Some("wildmesh".to_string()),
+            payment_identity: None,
             interests: vec!["local".to_string()],
             host: "127.0.0.1".to_string(),
             port: 4500,
@@ -1432,6 +1436,7 @@ mod tests {
             transport_peer_id: "transport-1".to_string(),
             peer,
             subscriptions: vec!["market.alerts".to_string()],
+            channels: vec![],
             listen_addrs: vec!["/ip4/192.168.1.77/tcp/4509".to_string()],
         };
         let discovered = discovered_peer_from_profile(&profile);
@@ -1511,30 +1516,37 @@ async fn accept_inbound_envelope(
     let allowed = match envelope.kind {
         MessageKind::Hello | MessageKind::Broadcast | MessageKind::PeerExchange => true,
         MessageKind::TaskResult | MessageKind::DelegateResult | MessageKind::ArtifactPayload => {
-            matches_reply_context(&state.pool, &envelope.sender_peer_id, &body).await? || grant_allowed
+            matches_reply_context(&state.pool, &envelope.sender_peer_id, &body).await?
+                || grant_allowed
         }
         _ => grant_allowed,
     };
-    let auto_delegate = state.config.cooperate_enabled && executor::delegate_available(&state.config);
-    let (status, reason, delivery_status) = if is_delegate_request && (!grant_allowed || !auto_delegate) {
-        let reason = if grant_allowed {
-            "pending local approval".to_string()
+    let auto_delegate =
+        state.config.cooperate_enabled && executor::delegate_available(&state.config);
+    let (status, reason, delivery_status) =
+        if is_delegate_request && (!grant_allowed || !auto_delegate) {
+            let reason = if grant_allowed {
+                "pending local approval".to_string()
+            } else {
+                "awaiting local approval or trust grant".to_string()
+            };
+            (MessageStatus::Pending, Some(reason), "pending".to_string())
+        } else if !allowed {
+            (
+                MessageStatus::Blocked,
+                Some(format!(
+                    "missing local capability grant for {}",
+                    envelope.capability.as_deref().unwrap_or("<none>")
+                )),
+                "blocked".to_string(),
+            )
         } else {
-            "awaiting local approval or trust grant".to_string()
+            (
+                MessageStatus::Received,
+                Some("accepted".to_string()),
+                "delivered".to_string(),
+            )
         };
-        (MessageStatus::Pending, Some(reason), "pending".to_string())
-    } else if !allowed {
-        (
-            MessageStatus::Blocked,
-            Some(format!(
-                "missing local capability grant for {}",
-                envelope.capability.as_deref().unwrap_or("<none>")
-            )),
-            "blocked".to_string(),
-        )
-    } else {
-        (MessageStatus::Received, Some("accepted".to_string()), "delivered".to_string())
-    };
     let stored_message = StoredMessage {
         id: envelope.id.clone(),
         direction: MessageDirection::Inbound,
@@ -1713,6 +1725,7 @@ async fn execute_delegate_and_queue_result(
             .read()
             .ok()
             .and_then(|value| value.public_address.clone()),
+        payment_identity: payment::load_payment_identity(),
         collaboration: crate::models::CollaborationView {
             cooperate_enabled: state.config.cooperate_enabled,
             executor_mode: state.config.executor_mode.clone(),

@@ -48,6 +48,8 @@ pub struct PeerRecord {
     pub node_type: Option<String>,
     #[serde(default)]
     pub runtime_name: Option<String>,
+    #[serde(default)]
+    pub payment_identity: Option<PaymentIdentity>,
     pub interests: Vec<String>,
     pub host: String,
     pub port: u16,
@@ -68,6 +70,23 @@ pub struct PeerRecord {
     pub activity_state: Option<String>,
     #[serde(default)]
     pub last_seen_age_secs: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PaymentIdentity {
+    pub provider: String,
+    pub kind: String,
+    pub address: String,
+    pub chain: String,
+    pub network: String,
+    #[serde(default)]
+    pub rpc_url: Option<String>,
+    #[serde(default)]
+    pub relay_installed: bool,
+    #[serde(default)]
+    pub relay_path: Option<String>,
+    #[serde(default)]
+    pub settlement_rails: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -372,6 +391,8 @@ pub struct LocalProfile {
     pub bootstrap_urls: Vec<String>,
     pub nat_status: String,
     pub public_address: Option<String>,
+    #[serde(default)]
+    pub payment_identity: Option<PaymentIdentity>,
     pub collaboration: CollaborationView,
 }
 

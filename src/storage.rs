@@ -7,7 +7,7 @@ use std::str::FromStr;
 
 use crate::models::{
     CapabilityGrant, ChannelRecord, Envelope, HubAnnouncement, HubPeerRecord, MessageDirection,
-    MessageKind, MessageStatus, OwnedChannelRecord, PendingDelegateRequest, PeerRecord,
+    MessageKind, MessageStatus, OwnedChannelRecord, PeerRecord, PendingDelegateRequest,
     StoredMessage, SubscriptionRecord,
 };
 
@@ -42,6 +42,7 @@ async fn init_schema(pool: &SqlitePool) -> Result<()> {
             agent_description TEXT,
             node_type TEXT,
             runtime_name TEXT,
+            payment_identity_json TEXT,
             interests_json TEXT NOT NULL DEFAULT '[]',
             host TEXT NOT NULL,
             port INTEGER NOT NULL,
@@ -144,6 +145,9 @@ async fn init_schema(pool: &SqlitePool) -> Result<()> {
     let _ = sqlx::query("ALTER TABLE peers ADD COLUMN runtime_name TEXT")
         .execute(pool)
         .await;
+    let _ = sqlx::query("ALTER TABLE peers ADD COLUMN payment_identity_json TEXT")
+        .execute(pool)
+        .await;
     let _ = sqlx::query("ALTER TABLE peers ADD COLUMN interests_json TEXT NOT NULL DEFAULT '[]'")
         .execute(pool)
         .await;
@@ -212,17 +216,18 @@ pub async fn upsert_peer(pool: &SqlitePool, peer: &PeerRecord) -> Result<()> {
     sqlx::query(
         r#"
         INSERT INTO peers (
-            peer_id, label, agent_label, agent_description, node_type, runtime_name, interests_json,
+            peer_id, label, agent_label, agent_description, node_type, runtime_name, payment_identity_json, interests_json,
             host, port, public_key, encryption_public_key, relay_url, notes, discovered, last_seen_at, created_at,
             accepts_context_capsules, accepts_artifact_exchange, accepts_delegate_work
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(peer_id) DO UPDATE SET
             label=excluded.label,
             agent_label=excluded.agent_label,
             agent_description=excluded.agent_description,
             node_type=excluded.node_type,
             runtime_name=excluded.runtime_name,
+            payment_identity_json=excluded.payment_identity_json,
             interests_json=excluded.interests_json,
             host=excluded.host,
             port=excluded.port,
@@ -243,6 +248,10 @@ pub async fn upsert_peer(pool: &SqlitePool, peer: &PeerRecord) -> Result<()> {
     .bind(&peer.agent_description)
     .bind(&peer.node_type)
     .bind(&peer.runtime_name)
+    .bind(match &peer.payment_identity {
+        Some(value) => Some(serde_json::to_string(value)?),
+        None => None,
+    })
     .bind(serde_json::to_string(&peer.interests)?)
     .bind(&peer.host)
     .bind(i64::from(peer.port))
@@ -349,10 +358,12 @@ pub async fn list_subscriptions(pool: &SqlitePool) -> Result<Vec<SubscriptionRec
 }
 
 pub async fn get_channel(pool: &SqlitePool, topic: &str) -> Result<Option<ChannelRecord>> {
-    let row = sqlx::query("SELECT topic, owner_peer_id, owner_agent_label, created_at FROM channels WHERE topic = ?")
-        .bind(topic)
-        .fetch_optional(pool)
-        .await?;
+    let row = sqlx::query(
+        "SELECT topic, owner_peer_id, owner_agent_label, created_at FROM channels WHERE topic = ?",
+    )
+    .bind(topic)
+    .fetch_optional(pool)
+    .await?;
     row.map(|row| {
         Ok(ChannelRecord {
             topic: row.get("topic"),
@@ -823,6 +834,12 @@ fn row_to_peer(row: &sqlx::sqlite::SqliteRow) -> Result<PeerRecord> {
             .try_get::<Option<String>, _>("runtime_name")
             .ok()
             .flatten(),
+        payment_identity: row
+            .try_get::<Option<String>, _>("payment_identity_json")
+            .ok()
+            .flatten()
+            .map(|raw| serde_json::from_str(&raw))
+            .transpose()?,
         interests: serde_json::from_str(&row.get::<String, _>("interests_json"))?,
         host: row.get("host"),
         port: row.get::<i64, _>("port") as u16,

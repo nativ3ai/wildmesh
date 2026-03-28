@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use agentmesh::config::AgentMeshConfig;
 use agentmesh::models::{
     ArtifactFetchRequest, ArtifactOfferRequest, ContextCapsuleRequest, DelegateDecisionRequest,
-    DelegateWorkRequest, MessageKind, MessageStatus, PeerRecord, StoredMessage,
+    DelegateWorkRequest, MessageKind, MessageStatus, PaymentIdentity, PeerRecord, StoredMessage,
 };
 use agentmesh::service::MeshService;
 use agentmesh::storage;
@@ -40,6 +40,17 @@ async fn peer_storage_roundtrip_preserves_profile_metadata() {
         agent_description: Some("Tracks macro and rates".to_string()),
         node_type: Some("agent".to_string()),
         runtime_name: Some("wildmesh".to_string()),
+        payment_identity: Some(PaymentIdentity {
+            provider: "wildaddy".to_string(),
+            kind: "evm_wallet".to_string(),
+            address: "0xabc123".to_string(),
+            chain: "base".to_string(),
+            network: "mainnet".to_string(),
+            rpc_url: Some("https://rpc.example".to_string()),
+            relay_installed: true,
+            relay_path: Some("/tmp/wildaddy/vendor/agentic-commerce-relay".to_string()),
+            settlement_rails: vec!["usdc".to_string(), "cctp".to_string()],
+        }),
         interests: vec!["macro".to_string(), "rates".to_string()],
         host: "127.0.0.1".to_string(),
         port: 4500,
@@ -71,6 +82,10 @@ async fn peer_storage_roundtrip_preserves_profile_metadata() {
     assert_eq!(
         loaded.interests,
         vec!["macro".to_string(), "rates".to_string()]
+    );
+    assert_eq!(
+        loaded.payment_identity.as_ref().map(|value| value.address.as_str()),
+        Some("0xabc123")
     );
 }
 
@@ -191,7 +206,10 @@ async fn channels_are_globally_visible_and_exact_names_are_unique() {
     let duplicate = service_b.create_channel(&topic.topic).await;
     assert!(duplicate.is_err());
 
-    let joined = service_b.subscribe(&topic.topic).await.expect("join existing");
+    let joined = service_b
+        .subscribe(&topic.topic)
+        .await
+        .expect("join existing");
     assert_eq!(joined.topic, topic.topic);
 
     wait_for("channel membership propagation", || async {
@@ -646,7 +664,10 @@ async fn delegated_work_can_be_trusted_from_the_pending_queue() {
             .list_pending_delegate_requests(20)
             .await
             .expect("pending list");
-        if let Some(item) = items.into_iter().find(|item| item.peer_id == peer_a.peer_id) {
+        if let Some(item) = items
+            .into_iter()
+            .find(|item| item.peer_id == peer_a.peer_id)
+        {
             break item;
         }
         sleep(Duration::from_millis(300)).await;
@@ -665,7 +686,10 @@ async fn delegated_work_can_be_trusted_from_the_pending_queue() {
         .expect("approve pending with trust");
 
     assert!(decision.grant_created);
-    assert_eq!(decision.granted_capability.as_deref(), Some("delegate_work"));
+    assert_eq!(
+        decision.granted_capability.as_deref(),
+        Some("delegate_work")
+    );
 
     let grants = service_b.list_grants().await.expect("list grants");
     assert!(grants.iter().any(|grant| {

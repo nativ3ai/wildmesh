@@ -9,10 +9,10 @@ use tracing::info;
 
 use crate::models::{
     AddPeerRequest, ArtifactFetchRequest, ArtifactOfferRequest, ArtifactRecord, BroadcastRequest,
-    BroadcastResponse, CapabilityGrant, ContextCapsuleRequest, DelegateDecisionRequest,
-    CreateChannelRequest, CreateChannelResponse, DelegateDecisionResponse, DelegateWorkRequest,
-    DiscoveryAnnounceRequest, GrantRequest, PeerRecord, PendingDelegateRequest,
-    RevokeGrantRequest, SendMessageRequest, SubscribeRequest, SubscriptionRecord, TopicView,
+    BroadcastResponse, CapabilityGrant, ContextCapsuleRequest, CreateChannelRequest,
+    CreateChannelResponse, DelegateDecisionRequest, DelegateDecisionResponse, DelegateWorkRequest,
+    DiscoveryAnnounceRequest, GrantRequest, PeerRecord, PendingDelegateRequest, RevokeGrantRequest,
+    SendMessageRequest, SubscribeRequest, SubscriptionRecord, TopicView,
 };
 use crate::service::MeshService;
 
@@ -85,6 +85,7 @@ async fn add_peer(
         agent_description: None,
         node_type: None,
         runtime_name: None,
+        payment_identity: None,
         interests: Vec::new(),
         host: payload.host,
         port: payload.port,
@@ -150,7 +151,12 @@ async fn revoke_grant(
                 "revoked": deleted,
             }))
         })
-        .map_err(|err| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))
+        .map_err(|err| {
+            (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                err.to_string(),
+            )
+        })
 }
 
 async fn send_message(

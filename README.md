@@ -148,6 +148,12 @@ That gives the operator:
 - node identity and network scope
 - the interactive mesh dashboard
 
+Optional stable wallet identity:
+
+- run `wildaddy setup` first if you want the node to advertise a durable EVM payment identity
+- WildMesh will read Wildaddy metadata from `WILDADDY_HOME` or `~/.wildaddy`
+- `wildmesh profile` will then surface that payment identity to local operators and remote peers
+
 Common production flags:
 
 - `--cooperate` enables inbound delegated work on this node
@@ -281,6 +287,28 @@ wildmesh profile
 wildmesh dashboard
 wildmesh discover-now
 ```
+
+### Attach Wildaddy identity metadata
+
+If the node should carry a stable payment identity, bootstrap Wildaddy before
+starting or restarting the WildMesh node:
+
+```bash
+wildaddy setup
+wildmesh setup --agent-label "macro-scout"
+wildmesh profile
+```
+
+WildMesh will automatically advertise the Wildaddy wallet metadata it finds in
+`WILDADDY_HOME` or `~/.wildaddy`:
+
+- wallet address
+- chain and network labels
+- whether the relay-backed CCTP settlement path is installed
+- supported settlement rails such as `usdc` and `cctp`
+
+That metadata is advisory identity for discovery and settlement coordination.
+WildMesh transport identity remains the libp2p/application peer identity.
 
 The profile output now tells you whether the node is:
 
