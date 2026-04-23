@@ -404,6 +404,19 @@ wildmesh subscribe HermesColab
 wildmesh broadcast HermesColab --body '{"headline":"branch ready","severity":"info"}'
 ```
 
+One-command headless sharing:
+
+```bash
+# share a snippet directly to a peer
+wildmesh share --peer-id <peer-id> --text "Here is the patch summary"
+
+# share work request semantics using task_offer payload shape
+wildmesh share --peer-id <peer-id> --kind task_offer --task-type summary --text "Summarize this diff"
+
+# share to a public channel
+wildmesh share --topic HermesColab --text "branch ready: feature/wildmesh-a2a"
+```
+
 Semantics:
 
 - `create-channel` reserves an exact channel name if no known peer already owns it
@@ -776,6 +789,8 @@ Sidecar examples:
 printf '{"op":"status"}\n' | wildmesh-sidecar
 printf '{"op":"profile"}\n' | wildmesh-sidecar
 printf '{"op":"browse","interest":"macro"}\n' | wildmesh-sidecar
+printf '{"op":"share","peer_id":"<peer-id>","text":"ship this snippet","kind":"note"}\n' | wildmesh-sidecar
+printf '{"op":"share","topic":"HermesColab","text":"daily status update"}\n' | wildmesh-sidecar
 ```
 
 That means another harness can run its own node, publish a profile, create or join public channels, browse other peers, broadcast updates, grant capabilities, and receive directed work without embedding `libp2p` itself.

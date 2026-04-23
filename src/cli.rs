@@ -331,6 +331,24 @@ pub enum Commands {
         #[arg(long)]
         home: Option<PathBuf>,
     },
+    Share {
+        #[arg(long)]
+        peer_id: Option<String>,
+        #[arg(long)]
+        topic: Option<String>,
+        #[arg(long)]
+        text: String,
+        #[arg(long, default_value = "note")]
+        kind: String,
+        #[arg(long)]
+        title: Option<String>,
+        #[arg(long)]
+        task_type: Option<String>,
+        #[arg(long)]
+        capability: Option<String>,
+        #[arg(long)]
+        home: Option<PathBuf>,
+    },
     Inbox {
         #[arg(long, default_value_t = 50)]
         limit: i64,
@@ -1112,6 +1130,72 @@ pub async fn main_entry() -> Result<()> {
                     &post_json(home, "/v1/messages/broadcast", &payload).await?
                 )?
             );
+        }
+        Commands::Share {
+            peer_id,
+            topic,
+            text,
+            kind,
+            title,
+            task_type,
+            capability,
+            home,
+        } => {
+            if peer_id.is_some() == topic.is_some() {
+                bail!("use exactly one destination: --peer-id <id> or --topic <name>");
+            }
+            let title_for_body = title.clone();
+            let body = if kind == "task_offer" {
+                json!({
+                    "task_type": task_type.unwrap_or_else(|| "share".to_string()),
+                    "instruction": text.clone(),
+                    "input": {"text": text.clone()},
+                    "title": title_for_body,
+                })
+            } else if kind == "context_capsule" {
+                json!({
+                    "title": title_for_body
+                        .unwrap_or_else(|| "shared context".to_string()),
+                    "context": {"text": text.clone()},
+                })
+            } else {
+                json!({
+                    "title": title_for_body,
+                    "text": text.clone(),
+                    "format": "plain_text",
+                })
+            };
+
+            if let Some(peer_id) = peer_id {
+                let payload = json!({
+                    "peer_id": peer_id,
+                    "kind": map_kind(&kind)?,
+                    "body": body,
+                    "capability": capability,
+                });
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(
+                        &post_json(home, "/v1/messages/send", &payload).await?
+                    )?
+                );
+            } else if let Some(topic) = topic {
+                let payload = json!({
+                    "topic": topic,
+                    "body": {
+                        "kind": kind.clone(),
+                        "title": title.clone(),
+                        "text": text.clone(),
+                        "format": "plain_text",
+                    },
+                });
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(
+                        &post_json(home, "/v1/messages/broadcast", &payload).await?
+                    )?
+                );
+            }
         }
         Commands::Inbox { limit, home } => {
             let url = format!("/v1/messages/inbox?limit={}", limit.clamp(1, 200));
@@ -2033,6 +2117,92 @@ async fn run_sidecar(home: Option<PathBuf>) -> Result<()> {
                     .error_for_status()?
                     .json::<Value>()
                     .await?
+            }
+            Some("share") => {
+                let peer_id = value.get("peer_id").and_then(Value::as_str).map(str::to_string);
+                let topic = value.get("topic").and_then(Value::as_str).map(str::to_string);
+                if peer_id.is_some() == topic.is_some() {
+                    json!({"error":"use exactly one destination: peer_id or topic"})
+                } else {
+                    let text = value
+                        .get("text")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string();
+                    let kind = value
+                        .get("kind")
+                        .and_then(Value::as_str)
+                        .unwrap_or("note")
+                        .to_string();
+                    let title = value.get("title").and_then(Value::as_str).map(str::to_string);
+                    let capability = value
+                        .get("capability")
+                        .and_then(Value::as_str)
+                        .map(str::to_string);
+                    let task_type = value
+                        .get("task_type")
+                        .and_then(Value::as_str)
+                        .map(str::to_string);
+
+                    let title_for_body = title.clone();
+                    let body = if kind == "task_offer" {
+                        json!({
+                            "task_type": task_type.unwrap_or_else(|| "share".to_string()),
+                            "instruction": text.clone(),
+                            "input": {"text": text.clone()},
+                            "title": title_for_body,
+                        })
+                    } else if kind == "context_capsule" {
+                        json!({
+                            "title": title_for_body
+                                .unwrap_or_else(|| "shared context".to_string()),
+                            "context": {"text": text.clone()},
+                        })
+                    } else {
+                        json!({
+                            "title": title_for_body,
+                            "text": text.clone(),
+                            "format": "plain_text",
+                        })
+                    };
+
+                    if let Some(peer_id) = peer_id {
+                        let payload = json!({
+                            "peer_id": peer_id,
+                            "kind": map_kind(&kind)?,
+                            "body": body,
+                            "capability": capability,
+                        });
+                        client
+                            .post(format!("{base}/v1/messages/send"))
+                            .json(&payload)
+                            .send()
+                            .await?
+                            .error_for_status()?
+                            .json::<Value>()
+                            .await?
+                    } else if let Some(topic) = topic {
+                        let payload = json!({
+                            "topic": topic,
+                            "body": {
+                                "kind": kind.clone(),
+                                "title": title.clone(),
+                                "text": text.clone(),
+                                "format": "plain_text",
+                            },
+                        });
+                        client
+                            .post(format!("{base}/v1/messages/broadcast"))
+                            .json(&payload)
+                            .send()
+                            .await?
+                            .error_for_status()?
+                            .json::<Value>()
+                            .await?
+                    } else {
+                        json!({"error":"missing destination"})
+                    }
+                }
             }
             Some("inbox") => {
                 json!({"items": client.get(format!("{base}/v1/messages/inbox?limit={}", value.get("limit").and_then(Value::as_i64).unwrap_or(50))).send().await?.error_for_status()?.json::<Value>().await?})
