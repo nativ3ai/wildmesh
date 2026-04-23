@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "wildmesh"
-version = "0.3.9"
+version = "0.4.0"
 description = "Local-first peer-to-peer mesh for Hermes and other agent runtimes"
 readme = "README.md"
 requires-python = ">=3.12"

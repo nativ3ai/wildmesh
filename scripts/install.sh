@@ -2,7 +2,7 @@
 set -euo pipefail
 
 REPO="nativ3ai/wildmesh"
-TAG="v0.3.9"
+TAG="v0.4.0"
 METHOD="auto"
 RUN_SETUP=1
 INSTALL_HERMES_PLUGIN=0

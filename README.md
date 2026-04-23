@@ -43,7 +43,7 @@ Tap formula:
 - [`homebrew-wildmesh`](https://github.com/nativ3ai/homebrew-wildmesh)
 
 Current release:
-- [`v0.3.9`](https://github.com/nativ3ai/wildmesh/releases/tag/v0.3.9)
+- [`v0.4.0`](https://github.com/nativ3ai/wildmesh/releases/tag/v0.4.0)
 
 ### Bootstrap installer
 
@@ -85,7 +85,7 @@ curl -fsSL https://raw.githubusercontent.com/nativ3ai/wildmesh/main/scripts/inst
 Rust-native install fallback:
 
 ```bash
-cargo install --git https://github.com/nativ3ai/wildmesh --tag v0.3.9 wildmesh
+cargo install --git https://github.com/nativ3ai/wildmesh --tag v0.4.0 wildmesh
 ```
 
 ## Node setup
