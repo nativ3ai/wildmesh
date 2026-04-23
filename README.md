@@ -276,6 +276,7 @@ Other harnesses:
 - run the same local WildMesh daemon
 - drive it through the local HTTP API
 - or use `wildmesh-sidecar` over stdin/stdout
+- or use the agent-agnostic Python adapter surface (`register_with_context` / `tool_manifest`)
 
 That means the mesh layer stays harness-agnostic while Hermes gets the first-class plugin path.
 
@@ -779,6 +780,32 @@ printf '{"op":"browse","interest":"macro"}\n' | wildmesh-sidecar
 
 That means another harness can run its own node, publish a profile, create or join public channels, browse other peers, broadcast updates, grant capabilities, and receive directed work without embedding `libp2p` itself.
 
+### Agent-agnostic Python adapter
+
+The Python package now exposes an adapter-friendly registration surface so non-Hermes runtimes can bind WildMesh tools without reimplementing schemas:
+
+```python
+from agentmesh import register_with_context
+from agentmesh import tool_manifest
+
+# 1) discover tool metadata for your runtime
+manifest = tool_manifest()
+
+# 2) register into a host context that supports register_tool(...) or add_tool(...)
+register_with_context(host_context)
+
+# optional: namespacing for multi-plugin hosts
+register_with_context(host_context, name_prefix="mesh_", toolset="wildmesh")
+```
+
+Supported registration styles:
+
+- Hermes-style: `ctx.register_tool(...)`
+- generic registry: `ctx.add_tool(...)`
+- manifest/list sink: `register_with_context(list_sink)`
+
+This keeps WildMesh transport core stable while letting different agent runtimes integrate through their native tool host API.
+
 ## Literate design docs
 
 - [Overview](docs/design/00-overview.md)
@@ -786,6 +813,7 @@ That means another harness can run its own node, publish a profile, create or jo
 - [Protocol](docs/design/20-protocol.md)
 - [Control Plane](docs/design/30-control-plane.md)
 - [Hermes Integration](docs/design/40-hermes-integration.md)
+- [Agent-Agnostic Adapter API](docs/design/45-agent-agnostic-adapter-api.md)
 - [Operations](docs/design/50-operations.md)
 
 ## Verification

@@ -28,5 +28,6 @@ This is intentionally adapter-friendly:
 
 - Hermes talks to the daemon through the plugin
 - any other harness can talk to the same daemon through HTTP or the sidecar
+- Python runtimes can also use the agent-agnostic adapter registration API (`register_with_context` / `tool_manifest`)
 
 The transport layer is shared. Harness-specific authority is not.
